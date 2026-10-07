@@ -39,6 +39,7 @@ from regime_trader.calibration import smoothed_states, state_calibration
 from regime_trader.features import Z_FEATURES, compute_features, healthy
 from regime_trader.hmm import forward_filter
 from regime_trader.llm import BudgetExceededError, NightlyReviewer, ReviewRefusedError
+from regime_trader.metrics import hit_rate
 from regime_trader.playbook import Playbook, PlaybookError, parse_playbook
 from regime_trader.refit import Fit
 from regime_trader.store import Journal, write_json
@@ -120,8 +121,9 @@ def _calibration_line(bars: pd.DataFrame, fit: Fit) -> str:
 
 
 def daily_report(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date) -> str:
-    decisions = _on(journal.decisions(), "ts", day)
-    trips = [t for t in round_trips(journal.fills(), journal.decisions()) if t.closed_on == day]
+    every_decision = journal.decisions()
+    decisions = _on(every_decision, "ts", day)
+    trips = [t for t in round_trips(journal.fills(), every_decision) if t.closed_on == day]
     lines = [f"# Daily report {day}", ""]
 
     lines += ["## Current state"]
@@ -148,8 +150,7 @@ def daily_report(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date) -> s
     lines += ["", "## P&L per state"]
     lines += [f"- {state}: {pnl:+,.2f}" for state, pnl in by_state.items()] or ["- none"]
 
-    wins = [t for t in trips if t.pnl > 0]
-    win_rate = f"{len(wins) / len(trips):.0%} of {len(trips)} trades" if trips else "no trades"
+    win_rate = f"{hit_rate([t.pnl for t in trips]):.0%} of {len(trips)} trades" if trips else "no trades"
     lines += ["", "## Win rate", win_rate]
     losses = [t.pnl for t in trips if t.pnl < 0]
     lines += ["", "## Largest loss", f"{min(losses):+,.2f}" if losses else "none"]
@@ -157,8 +158,16 @@ def daily_report(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date) -> s
     return "\n".join(lines) + "\n"
 
 
-def day_record(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date) -> str:
-    """The day as data for the reviewer, inside <record> tags."""
+def write_daily_report(reports_dir: Path, day: date, report: str) -> Path:
+    path = reports_dir / f"{day}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report, encoding="utf-8")
+    return path
+
+
+def day_record(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date, report: str) -> str:
+    """The day as data for the reviewer, inside <record> tags. `report` is
+    that day's `daily_report`, already built by the caller."""
     day_bars = bars[pd.DatetimeIndex(bars.index).date == day]
     decisions, fills = journal.decisions(), journal.fills()
     trips = round_trips(fills, decisions)
@@ -169,7 +178,7 @@ def day_record(journal: Journal, bars: pd.DataFrame, fit: Fit, day: date) -> str
         "Events": _on(journal.events(), "ts", day).to_csv(index=False),
         "Round trips (all time)": "\n".join(f"{t.state},{t.opened},{t.closed},{t.pnl:.2f}" for t in trips),
         "Wrong state calls (filtered leader vs hindsight)": wrong_state_calls(bars, fit, day).to_csv(),
-        "Daily report": daily_report(journal, bars, fit, day),
+        "Daily report": report,
     }
     body = "\n\n".join(f"## {title}\n{text.strip() or '(none)'}" for title, text in sections.items())
     return f"<record>\nDay: {day}\nModel states: {', '.join(fit.model.labels)}\n\n{body}\n</record>\n"
@@ -288,15 +297,13 @@ def run_nightly(
     now: datetime,
 ) -> NightlyResult:
     report = daily_report(journal, bars, fit, day)
-    report_path = reports_dir / f"{day}.md"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report, encoding="utf-8")
+    report_path = write_daily_report(reports_dir, day, report)
     _alert(alerts, "report", report)
 
     if reviewer is None:
         return NightlyResult(report_path, None, ())
     try:
-        review = reviewer.review(day_record(journal, bars, fit, day), now)
+        review = reviewer.review(day_record(journal, bars, fit, day, report), now)
     except (BudgetExceededError, ReviewRefusedError) as error:
         _alert(alerts, "error", f"nightly review skipped (LLM budget or refusal): {error}")
         return NightlyResult(report_path, None, ())

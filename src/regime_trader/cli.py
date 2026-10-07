@@ -36,7 +36,7 @@ from regime_trader.features import compute_features
 from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.live import Control, LiveConfig, Trader, missed_bar, run
 from regime_trader.llm import AnthropicReviewClient, NightlyReviewer, SpendLedger
-from regime_trader.nightly import daily_report, run_nightly
+from regime_trader.nightly import daily_report, run_nightly, write_daily_report
 from regime_trader.refit import FitConfig, fit_regime, training_set
 from regime_trader.store import BarCache, Journal, load_fit, load_playbooks, save_fit
 
@@ -272,9 +272,7 @@ def _day(args: argparse.Namespace) -> date:
 def _report(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) -> int:
     day = _day(args)
     report = daily_report(Journal(paths.journal), BarCache(paths.data).load(SYMBOL), load_fit(paths.fit), day)
-    path = paths.reports / f"{day}.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report, encoding="utf-8")
+    write_daily_report(paths.reports, day, report)
     print(report)
     return 0
 

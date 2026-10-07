@@ -29,7 +29,7 @@ from regime_trader.llm import (
     cost_usd,
 )
 from regime_trader.refit import DriftReport, Fit
-from regime_trader.store import BarCache, Journal, load_fit, load_model, load_playbooks, save_fit, save_model
+from regime_trader.store import BarCache, Journal, load_fit, load_playbooks, save_fit
 from regime_trader.yahoo import normalize_yahoo
 
 REPO = Path(__file__).resolve().parents[1]
@@ -59,26 +59,21 @@ def test_playbooks_load_by_state_and_reject_a_misnamed_file(tmp_path: Path) -> N
         load_playbooks(tmp_path)
 
 
-def test_models_round_trip_through_json(tmp_path: Path) -> None:
-    model = RegimeModel(
-        hmm=HmmModel(
-            np.array([0.5, 0.5]),
-            np.array([[0.9, 0.1], [0.2, 0.8]]),
-            np.zeros((2, 5)),
-            np.array([np.eye(5)] * 2),
-        ),
-        labels=("CALM_UP", "CRASH"),
-        return_mean=np.array([0.001, -0.002]),
-        return_vol=np.array([0.002, 0.01]),
-    )
-    save_model(tmp_path / "model.json", model)
-    loaded = load_model(tmp_path / "model.json")
-    assert loaded.labels == model.labels
-    np.testing.assert_array_equal(loaded.hmm.covars, model.hmm.covars)
+TWO_STATE = RegimeModel(
+    hmm=HmmModel(
+        np.array([0.5, 0.5]),
+        np.array([[0.9, 0.1], [0.2, 0.8]]),
+        np.zeros((2, 5)),
+        np.array([np.eye(5)] * 2),
+    ),
+    labels=("CALM_UP", "CRASH"),
+    return_mean=np.array([0.001, -0.002]),
+    return_vol=np.array([0.002, 0.01]),
+)
 
 
 def test_a_fit_bundle_round_trips_with_kelly_likelihoods_and_prior(tmp_path: Path) -> None:
-    model = load_model(_saved_model(tmp_path))
+    model = TWO_STATE
     fit = Fit(
         model=model,
         kelly={"CALM_UP": 0.8, "CRASH": 0.0},
@@ -101,22 +96,7 @@ def test_a_fit_bundle_round_trips_with_kelly_likelihoods_and_prior(tmp_path: Pat
     np.testing.assert_array_equal(loaded.insample_ll, fit.insample_ll)
     np.testing.assert_array_equal(loaded.prior, fit.prior)
     assert loaded.model.labels == model.labels
-
-
-def _saved_model(tmp_path: Path) -> Path:
-    model = RegimeModel(
-        hmm=HmmModel(
-            np.array([0.5, 0.5]),
-            np.array([[0.9, 0.1], [0.2, 0.8]]),
-            np.zeros((2, 5)),
-            np.array([np.eye(5)] * 2),
-        ),
-        labels=("CALM_UP", "CRASH"),
-        return_mean=np.array([0.001, -0.002]),
-        return_vol=np.array([0.002, 0.01]),
-    )
-    save_model(tmp_path / "model.json", model)
-    return tmp_path / "model.json"
+    np.testing.assert_array_equal(loaded.model.hmm.covars, model.hmm.covars)
 
 
 def test_journal_records_decisions_fills_and_events(tmp_path: Path) -> None:

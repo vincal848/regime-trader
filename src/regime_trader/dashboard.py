@@ -89,15 +89,16 @@ def main() -> None:  # pragma: no cover -- the Streamlit page; the data above is
 
     import streamlit as st
 
+    from regime_trader.cli import Paths
     from regime_trader.store import load_fit, load_playbooks
 
-    root = Path(sys.argv[sys.argv.index("--root") + 1] if "--root" in sys.argv else ".")
+    paths = Paths(Path(sys.argv[sys.argv.index("--root") + 1] if "--root" in sys.argv else "."))
     st.set_page_config(page_title="Regime trader", layout="wide")
     data = dashboard_data(
-        Journal(root / "journal.db"),
-        load_fit(root / "models" / "fit.json"),
-        load_playbooks(root / "playbooks"),
-        root / "live_state.json",
+        Journal(paths.journal),
+        load_fit(paths.fit),
+        load_playbooks(paths.playbooks),
+        paths.state,
         RiskLimits(),
     )
     st.title("Regime trader (IBKR paper)")

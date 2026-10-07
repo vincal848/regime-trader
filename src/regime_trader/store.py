@@ -98,14 +98,6 @@ def write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def save_model(path: Path, model: RegimeModel) -> None:
-    write_json(path, _model_payload(model))
-
-
-def load_model(path: Path) -> RegimeModel:
-    return _model_from(json.loads(path.read_text(encoding="utf-8")))
-
-
 def save_fit(path: Path, fit: Fit) -> None:
     payload = _model_payload(fit.model)
     payload |= {
