@@ -161,3 +161,17 @@ def test_characterize_attaches_return_statistics_and_labels() -> None:
     assert model.labels[2] == "CRASH"
     assert model.return_mean[2] == pytest.approx(-0.004, abs=0.0005)
     assert model.return_vol is not None
+
+
+def test_stepping_the_filter_one_bar_at_a_time_equals_the_batch_filter() -> None:
+    from regime_trader.hmm import filter_step, initial_prior
+
+    x, _ = _sample(PLANTED, 150, seed=10)
+    batch = forward_filter(PLANTED, x)
+    prior = initial_prior(PLANTED)
+    for t in range(len(x)):
+        step = filter_step(PLANTED, prior, x[t])
+        np.testing.assert_allclose(step.filtered, batch.filtered[t], rtol=1e-12)
+        np.testing.assert_allclose(step.next_state, batch.next_state[t], rtol=1e-12)
+        assert step.log_likelihood == pytest.approx(batch.log_likelihood[t])
+        prior = step.next_state
