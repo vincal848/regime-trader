@@ -347,3 +347,82 @@ then its implementation, then anything the review found.
   disk.
 - The CLI backtest header now says "no locked holdout: demo only" for
   `--no-holdout` runs.
+
+### Step 11: /simplify review (four parallel agents: reuse, simplification, efficiency, altitude)
+Findings were deduplicated across the four reviews. Behaviour changes went
+tests first; the refactors were checked against the existing suite.
+
+**Altitude (behaviour fixes, tests first):**
+- **Live dropped the regime at every refit.** Live reset the switching
+  state on a new fit, so it went flat and closed any position for at least
+  3 bars after each monthly refit; the backtest kept the switching state.
+  Now one `refit.adopt_fit` serves both loops: the prior restarts from the
+  fit, the position carries over, and the switching state carries over
+  while every state it names still exists.
+- **Drift froze differently in research and in trading.** Live ignored
+  parameter drift (the CLI only alerted); the backtest froze only at
+  refits.
+  - Now the fit bundle carries its refit-time `DriftReport` and the
+    precomputed likelihood floor (`Fit.drift`, `Fit.ll_floor`, both
+    persisted).
+  - Both loops start a drifted fit with entries frozen, and both run the
+    same per-bar `rolling_alarm`.
+  - Bug caught while doing this: `save_fit`/`load_fit` did not persist the
+    new fields, so a fit loaded from disk would have had a floor of −∞ and
+    a live alarm that could never fire. The round-trip test now covers both
+    fields.
+- **The disconnect kill in `risk.kill_reasons` could never fire.** Both
+  loops passed 0 seconds, and live re-implemented the comparison. Live now
+  asks `risk.kill_reasons` with the real seconds, and an unknown peak
+  equity can no longer trigger, or crash, the drawdown check.
+- **A refused equity read bypassed the engine.** It is now an unhealthy
+  engine decision on the last accepted equity: risk-checked, journaled and
+  flat.
+- `regime-trader fit` saves the new fit before alerting, so a failed
+  Telegram send can no longer lose it.
+
+**Efficiency:**
+- Each state's Cholesky factor is cached per model, instead of
+  refactorising K covariance matrices on every bar.
+- The log-sum-exp is computed inline, since scipy's call cost about 20× more
+  on a K-vector.
+- State selection uses one filter pass instead of two.
+- The cost test reuses the backtest fixture.
+
+**Reuse and simplification:**
+- One definition each of `features.feature_rows`, `refit.training_set`,
+  `bars.in_regular_hours`, `bars.BARS_PER_SESSION` and `TIMEZONE`,
+  replacing three to four copies of each.
+- `BacktestConfig.fit` holds one `FitConfig`; it no longer copies its four
+  fields and defaults.
+- `store.write_json` is atomic and shared by the checkpoint, the spend
+  ledger, the fit bundle and the trial counter. The fit and trial files
+  were not atomic before.
+- Nightly builds the daily report once; `day_record` takes it.
+  `write_daily_report` is shared with the CLI, and the win rate uses
+  `metrics.hit_rate`.
+- The dashboard reads the on-disk layout from `cli.Paths`.
+- Dead code removed:
+  - `store.save_model`/`load_model` (only tests used them);
+  - the unused `gates` parameter of `acceptance`;
+  - the `pending` tuple, whose second element was always
+    `decision.target_shares`.
+
+**Skipped, with reasons:**
+- Sharing walk-forward refits across nightly proposal backtests. It is the
+  largest saving at real scale, but needs an API change in `run_backtest`.
+  Left for when nightly runtime matters.
+- A grid-agnostic `bar_end`. Live is IBKR-only, and Yahoo's
+  `index + 1h` is conservative: it only delays the 15:30 bar.
+- Typed pseudo-labels (`"NONE"`, `"EXTERNAL"`) and an `Regime` carrying the
+  state index. It would be a wide change for a cosmetic gain.
+- Routing `switching._is_danger` through `base_state`. The current prefix
+  rule also treats an unmatched `STRESS_NEW` as dangerous, which is the
+  more conservative choice.
+- Unifying the backtest's `Trade` with nightly's journal round trips. The
+  data shapes differ (portfolio book versus journal rows), and both are
+  tested.
+- Folding the explicit checkpoint serializer into `asdict`. The explicit
+  mapping is longer but obvious, and safe to change.
+- A shared test playbook builder, and the dashboard's per-rerun JSON
+  parsing. These are test-only or cost milliseconds.

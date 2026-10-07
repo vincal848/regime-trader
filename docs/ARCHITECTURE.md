@@ -87,7 +87,7 @@ did. `playbook_for` maps a state to its playbook, and numbered siblings
     log-likelihoods, the next-bar prior, and the calibration verdict
     (each refit scores the previous fit out of sample).
   - `match_labels` (Hungarian assignment on state statistics).
-  - `drift_report` (transition and mean shifts) and `likelihood_alarm`
+  - `drift_report` (transition and mean shifts, stored on the fit) and `rolling_alarm`
     (the live log-likelihood check).
 - **`calibration`.** The only module allowed to use smoothed posteriors.
   Brier score and reliability per state.

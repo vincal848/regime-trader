@@ -20,18 +20,20 @@ python scripts/demo_walkforward.py demo 2025-01-02
 - Model: K chosen once by out-of-sample likelihood, 10 restarts.
 - Costs: IBKR tiered commission, 1 bp of slippage, and half a cent of
   spread.
-- Run on 2026-10-07.
+- Run on 2026-10-07, after the step 11 fixes (switching carries across
+  refits; the likelihood alarm runs every bar). Before those fixes the
+  same run gave a Sharpe of −1.16 over 124 trades.
 
 ## Result: the gates fail
 
 | | System | Buy-and-hold | Best static (CALM_UP, chosen on training data) | Gate |
 |---|---|---|---|---|
-| Sharpe (daily, ×√252) | **−1.16** | 1.08 | 0.11 | > 1.5 |
-| Max drawdown | 7.6% | | | < 15% ✓ |
-| Hit rate (per trade) | 35.5% | | | > 55% |
-| t-statistic | −1.54 | | | > 2.0 |
-| Total return | −6.4% | | | |
-| Trades | 124 | | | |
+| Sharpe (daily, ×√252) | **−0.96** | 1.08 | 0.11 | > 1.5 |
+| Max drawdown | 6.0% | | | < 15% ✓ |
+| Hit rate (per trade) | 35.6% | | | > 55% |
+| t-statistic | −1.28 | | | > 2.0 |
+| Total return | −4.7% | | | |
+| Trades | 118 | | | |
 
 Only the drawdown gate passes, and it passes because the system is small
 and often flat. As the spec warned (§11, "Honest prior"), the system stays
@@ -46,7 +48,7 @@ on paper and the gates are not loosened.
    bars).
 2. **The CALM_UP entry rule loses after costs.** Both calm states traded
    the CALM_UP playbook (enter on `trend > 0.5 and ret > 0`, stop 3 × rv,
-   target 6 × rv). It won 35% of the time, and the losses outweighed the
+   target 6 × rv). It won 36% of the time, and the losses outweighed the
    wins. That is what a short-horizon momentum entry looks like on hourly
    SPY once each round trip pays about 2 bps. Buy-and-hold earned more by
    simply sitting through the same calm periods.
@@ -57,7 +59,7 @@ on paper and the gates are not loosened.
 4. **No drift alarms fired.** Labels stayed stable through every refit (the
    Hungarian matching worked, even though the state order changed nearly
    every month).
-5. **Manual approval would have mattered.** 24 orders exceeded $25,000
+5. **Manual approval would have mattered.** 18 orders exceeded $25,000
    and would have waited for `regime-trader approve`.
 
 ## What would be worth testing next (through the normal loop)
