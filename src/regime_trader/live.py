@@ -52,14 +52,14 @@ from regime_trader.engine import (
     playbook_for,
 )
 from regime_trader.engine import decide as engine_decide
-from regime_trader.features import Z_FEATURES, compute_features
+from regime_trader.features import Z_FEATURES, compute_features, healthy
 from regime_trader.hmm import filter_step
 from regime_trader.ibkr import FillReport
 from regime_trader.playbook import Playbook
-from regime_trader.refit import DriftConfig, Fit, likelihood_alarm
+from regime_trader.refit import DriftConfig, Fit, adopt_fit, rolling_alarm
 from regime_trader.risk import AccountState, Approved, Vetoed, kill_reasons
 from regime_trader.store import BarCache, Journal
-from regime_trader.switching import INITIAL, SwitchState
+from regime_trader.switching import SwitchState
 
 BAR_CLOSE_HOURS = range(10, 17)  # IBKR RTH grid: 09:30-10:00, then hourly to 16:00
 EXTERNAL = "EXTERNAL"  # the playbook of a position the trader did not open
@@ -196,12 +196,12 @@ def fit_id(fit: Fit) -> str:
 
 
 def _fresh(fit: Fit, now: pd.Timestamp, previous: Checkpoint | None) -> Checkpoint:
-    """A checkpoint for a new fit. Account history and any open position carry
-    over; the filter, the switching state and the drift window start again."""
-    position = previous.engine.position if previous else None
+    """A checkpoint for a new fit (`refit.adopt_fit`, as in the backtest).
+    Account history carries over; the drift window starts again, frozen if
+    the refit itself drifted."""
     return Checkpoint(
         fit_id=fit_id(fit),
-        engine=EngineState(prior=fit.prior, switch=INITIAL, position=position),
+        engine=adopt_fit(previous.engine if previous else None, fit),
         filtered_through=fit.trained_through,
         last_run=now,
         session=previous.session if previous else "",
@@ -211,7 +211,7 @@ def _fresh(fit: Fit, now: pd.Timestamp, previous: Checkpoint | None) -> Checkpoi
         consecutive_rejects=previous.consecutive_rejects if previous else 0,
         disconnected_since=None,
         live_ll=(),
-        entries_frozen=False,
+        entries_frozen=fit.drifted,
     )
 
 
@@ -325,6 +325,9 @@ class Trader:
         saved = load_checkpoint(state_path)
         now = pd.Timestamp.now(tz=TIMEZONE)
         self._checkpoint = saved if saved and saved.fit_id == fit_id(fit) else _fresh(fit, now, saved)
+        if self._checkpoint.entries_frozen and not (saved and saved.entries_frozen):
+            reasons = "; ".join(fit.drift.reasons) if fit.drift else "drift"
+            self._notify(now, "drift", f"refit drift ({reasons}): entries frozen until the next refit")
 
     @property
     def engine_state(self) -> EngineState:
@@ -362,7 +365,13 @@ class Trader:
 
     def _decide(self, now: pd.Timestamp, bars: pd.DataFrame, latest: pd.Timestamp) -> Decision:
         cp = self._checkpoint
-        equity = self._read_equity()
+        try:
+            equity, healthy = self._read_equity(), True
+        except BadAccountRead as error:
+            if not math.isfinite(cp.last_equity):
+                raise  # nothing accepted yet to fall back on
+            self._notify(latest, "error", f"{error}; deciding flat on the last accepted equity")
+            equity, healthy = cp.last_equity, False
         session = latest.date().isoformat()
         start_of_day = equity if session != cp.session else cp.start_of_day_equity
         peak = max(cp.peak_equity, equity)
@@ -395,7 +404,7 @@ class Trader:
             self.playbooks,
             self.fit.kelly,
             engine_config,
-            healthy=True,
+            healthy=healthy,
         )
         self._checkpoint = replace(
             cp,
@@ -502,9 +511,8 @@ class Trader:
         index = pd.DatetimeIndex(features.index)
         missed = features[(index > self._checkpoint.filtered_through) & (index < latest)]
         prior = engine.prior
-        for x in missed[list(Z_FEATURES)].to_numpy():
-            if np.isfinite(x).all():
-                prior = filter_step(self.fit.model.hmm, prior, x).next_state
+        for x in missed[healthy(missed)][list(Z_FEATURES)].to_numpy():
+            prior = filter_step(self.fit.model.hmm, prior, x).next_state
         return replace(engine, prior=prior)
 
     # -- guards -------------------------------------------------------------------------------
@@ -524,14 +532,13 @@ class Trader:
             return
         window = self.config.drift.ll_window
         live_ll = (*cp.live_ll, decision.log_likelihood)[-window:]
-        mean, floor = likelihood_alarm(np.array(live_ll), self.fit.insample_ll, self.config.drift)
         frozen = cp.entries_frozen
-        if not frozen and math.isfinite(mean) and mean < floor:
+        if not frozen and rolling_alarm(live_ll, self.fit.ll_floor, window):
             frozen = True
             self._notify(
                 ts,
                 "drift",
-                f"live log-likelihood {mean:.2f} below the in-sample floor {floor:.2f}: "
+                f"live log-likelihood below the in-sample floor {self.fit.ll_floor:.2f}: "
                 "entries frozen until the next refit",
             )
         self._checkpoint = replace(cp, live_ll=live_ll, entries_frozen=frozen)
@@ -557,9 +564,17 @@ class Trader:
         else:
             self.journal.record_event(now, "disconnected", f"{seconds:.0f}s")
         self._checkpoint = replace(cp, disconnected_since=since)
-        if seconds > self.config.engine.limits.max_disconnect_seconds and self.control.killed() is None:
-            self.control.kill(f"broker disconnected {seconds:.0f}s")
-            self._notify(now, "kill", f"kill switch: broker disconnected {seconds:.0f}s")
+        held = cp.engine.position.shares if cp.engine.position else 0
+        account = AccountState(
+            cp.last_equity,
+            cp.start_of_day_equity,
+            cp.peak_equity,
+            held,
+            cp.consecutive_rejects,
+            seconds,
+            self.control.killed() is not None,
+        )
+        self._watch_kill(now, account)
 
     def _stale(self, now: pd.Timestamp, latest: pd.Timestamp, price: float) -> None:
         shares = self.broker.position(self.config.symbol)

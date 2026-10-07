@@ -43,7 +43,6 @@ from regime_trader.engine import (
     on_fill,
     open_position,
     price_exit,
-    start,
 )
 from regime_trader.features import compute_features, healthy
 from regime_trader.metrics import (
@@ -57,7 +56,15 @@ from regime_trader.metrics import (
     t_statistic,
 )
 from regime_trader.playbook import Playbook, evaluate_signal
-from regime_trader.refit import DriftConfig, DriftReport, Fit, FitConfig, drift_report, fit_regime
+from regime_trader.refit import (
+    DriftConfig,
+    DriftReport,
+    Fit,
+    FitConfig,
+    adopt_fit,
+    fit_regime,
+    rolling_alarm,
+)
 from regime_trader.risk import AccountState, Approved, check_order, kill_reasons, state_cap
 
 FloatArray = npt.NDArray[np.float64]
@@ -249,18 +256,12 @@ def run_backtest(
 
         if ts >= next_refit:
             past = (index < ts) & healthy_rows
-            new = fit_regime(features[past], next_returns[past], playbooks, config.fit, current)
-            drift = None
-            if current is not None:
-                live = np.array(live_ll)
-                drift = drift_report(current.model, new.model, live, current.insample_ll, config.drift)
-                frozen = drift.drifted
-            state = start(new.model) if state is None else state
-            state = EngineState(prior=new.prior, switch=state.switch, position=state.position)
-            current, live_ll = new, []
+            new = fit_regime(features[past], next_returns[past], playbooks, config.fit, current, config.drift)
+            state = adopt_fit(state, new)
+            current, live_ll, frozen = new, [], new.drifted
             hmm = new.model.hmm
             refits.append(
-                RefitRecord(ts, hmm.n_states, new.model.labels, hmm.transmat, drift, new.calibrated)
+                RefitRecord(ts, hmm.n_states, new.model.labels, hmm.transmat, new.drift, new.calibrated)
             )
             next_refit = ts + pd.Timedelta(days=config.refit_days)
 
@@ -288,6 +289,7 @@ def run_backtest(
         killed = killed or bool(kill_reasons(config.engine.limits, account))
         if math.isfinite(decision.log_likelihood):
             live_ll.append(decision.log_likelihood)
+            frozen = frozen or rolling_alarm(live_ll, current.ll_floor, config.drift.ll_window)
         if decision.target_shares != portfolio.shares and isinstance(decision.order, Approved):
             manual += int(decision.order.needs_manual_approval)
             pending = (decision, decision.target_shares)

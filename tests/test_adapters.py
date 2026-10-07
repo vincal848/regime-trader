@@ -28,7 +28,7 @@ from regime_trader.llm import (
     Usage,
     cost_usd,
 )
-from regime_trader.refit import Fit
+from regime_trader.refit import DriftReport, Fit
 from regime_trader.store import BarCache, Journal, load_fit, load_model, load_playbooks, save_fit, save_model
 from regime_trader.yahoo import normalize_yahoo
 
@@ -86,10 +86,16 @@ def test_a_fit_bundle_round_trips_with_kelly_likelihoods_and_prior(tmp_path: Pat
         prior=np.array([0.7, 0.3]),
         trained_through=pd.Timestamp("2026-01-05 15:00", tz="America/New_York"),
         calibrated=True,
+        drift=DriftReport(0.2, 0.5, float("nan"), -1.2, True, ("transition probability shifted by 0.200",)),
+        ll_floor=-1.2,
     )
     save_fit(tmp_path / "fit.json", fit)
     loaded = load_fit(tmp_path / "fit.json")
     assert loaded.calibrated
+    assert loaded.ll_floor == -1.2
+    assert loaded.drifted
+    assert loaded.drift is not None
+    assert loaded.drift.reasons == ("transition probability shifted by 0.200",)
     assert loaded.kelly == fit.kelly
     assert loaded.trained_through == fit.trained_through
     np.testing.assert_array_equal(loaded.insample_ll, fit.insample_ll)

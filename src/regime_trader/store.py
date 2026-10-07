@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -23,7 +26,7 @@ from regime_trader.bars import COLUMNS, validate_bars
 from regime_trader.engine import Fill
 from regime_trader.hmm import FloatArray, HmmModel, RegimeModel
 from regime_trader.playbook import Playbook, parse_playbook
-from regime_trader.refit import Fit
+from regime_trader.refit import DriftReport, Fit
 
 
 class BarCache:
@@ -108,8 +111,23 @@ def save_fit(path: Path, fit: Fit) -> None:
         "prior": fit.prior.tolist(),
         "trained_through": fit.trained_through.isoformat(),
         "calibrated": fit.calibrated,
+        "drift": asdict(fit.drift) if fit.drift else None,
+        "ll_floor": fit.ll_floor,
     }
     _write_json(path, payload)
+
+
+def _drift_from(data: dict[str, Any] | None) -> DriftReport | None:
+    if data is None:
+        return None
+    return DriftReport(
+        transition_shift=float(data["transition_shift"]),
+        mean_shift_sd=float(data["mean_shift_sd"]),
+        live_ll_mean=float(data["live_ll_mean"]),
+        ll_threshold=float(data["ll_threshold"]),
+        drifted=bool(data["drifted"]),
+        reasons=tuple(str(reason) for reason in data["reasons"]),
+    )
 
 
 def load_fit(path: Path) -> Fit:
@@ -121,6 +139,8 @@ def load_fit(path: Path) -> Fit:
         prior=_array(data, "prior"),
         trained_through=pd.Timestamp(data["trained_through"]),
         calibrated=bool(data.get("calibrated", False)),
+        drift=_drift_from(data.get("drift")),
+        ll_floor=float(data.get("ll_floor", -math.inf)),
     )
 
 

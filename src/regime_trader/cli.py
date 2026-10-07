@@ -39,7 +39,7 @@ from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.live import Control, LiveConfig, Trader, missed_bar, run
 from regime_trader.llm import AnthropicReviewClient, NightlyReviewer, SpendLedger
 from regime_trader.nightly import daily_report, run_nightly
-from regime_trader.refit import DriftConfig, FitConfig, drift_report, fit_regime
+from regime_trader.refit import FitConfig, fit_regime
 from regime_trader.store import BarCache, Journal, load_fit, load_playbooks, save_fit
 
 SYMBOL = "SPY"
@@ -160,18 +160,20 @@ def _fit(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) -> int:
     sizing = "probability-weighted" if fit.calibrated else "a fixed quarter of the cap (not yet calibrated)"
     print(f"sizing: {sizing}")
     if previous is not None:
-        drift = drift_report(previous.model, fit.model, np.empty(0), previous.insample_ll, DriftConfig())
+        paths.fit.replace(paths.models / f"fit-{previous.trained_through:%Y%m%dT%H%M}.json")
+    save_fit(paths.fit, fit)
+    if fit.drift is not None:
+        drift = fit.drift
         verdict = "ALARM: " + "; ".join(drift.reasons) if drift.drifted else "none"
         print(
             f"drift vs the previous fit: {verdict} "
             f"(transition shift {drift.transition_shift:.3f}, mean shift {drift.mean_shift_sd:.2f} sd)"
         )
         if drift.drifted:
-            message = f"refit drift: {verdict}. The new fit is saved; review it before trading it."
-            _alerts(env).send("drift", message)
-        archive = paths.models / f"fit-{previous.trained_through:%Y%m%dT%H%M}.json"
-        paths.fit.replace(archive)
-    save_fit(paths.fit, fit)
+            with contextlib.suppress(Exception):  # the fit is saved; the alert is best-effort
+                _alerts(env).send(
+                    "drift", f"refit drift: {verdict}. Entries stay frozen until the next refit."
+                )
     return 0
 
 

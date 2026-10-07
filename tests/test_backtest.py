@@ -97,10 +97,15 @@ def test_sizing_waits_for_calibration(result: BacktestResult) -> None:
     assert (notional <= 0.25 * result.equity[window] + 1e-6).all()
 
 
-def test_a_likelihood_alarm_freezes_entries_mid_window() -> None:
+def test_a_likelihood_alarm_freezes_entries_mid_window(result: BacktestResult) -> None:
     nervous = replace(CONFIG, drift=DriftConfig(ll_window=1, ll_percentile=100.0))  # every bar alarms
     frozen = run_backtest(BARS, PLAYBOOKS, nervous)
-    assert frozen.fills == ()
+    refit_bars = {refit.ts for refit in frozen.refits}
+    entries = [fill for fill in frozen.fills if fill.shares > 0]
+    assert all(
+        fill.decision_ts in refit_bars for fill in entries
+    )  # a refit lifts the freeze until it re-arms
+    assert len(frozen.fills) < len(result.fills)
 
 
 def test_cash_accounting_reconciles(result: BacktestResult) -> None:

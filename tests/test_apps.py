@@ -461,7 +461,7 @@ def test_an_implausible_equity_read_is_refused(tmp_path: Path, fit: Fit) -> None
 
 
 def test_live_likelihood_drift_freezes_entries(tmp_path: Path, fit: Fit) -> None:
-    paranoid = replace(fit, insample_ll=np.full(200, 100.0))  # every live bar looks unlikely
+    paranoid = replace(fit, ll_floor=100.0)  # every live bar looks unlikely
     rig = _rig(tmp_path, paranoid, replace(NO_APPROVAL, drift=DriftConfig(ll_window=1)))
     rig.step(60)
     assert "drift" in rig.alerts.kinds()

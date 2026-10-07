@@ -68,7 +68,7 @@ def state_cap(limits: RiskLimits, label: str) -> float:
 
 def kill_reasons(limits: RiskLimits, account: AccountState) -> tuple[str, ...]:
     reasons = []
-    drawdown = 1.0 - account.equity / account.peak_equity
+    drawdown = 1.0 - account.equity / account.peak_equity if account.peak_equity > 0 else 0.0
     if drawdown >= limits.max_drawdown:
         reasons.append(f"max drawdown {drawdown:.1%} >= {limits.max_drawdown:.0%}")
     if account.consecutive_rejects >= limits.max_consecutive_rejects:

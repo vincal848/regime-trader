@@ -34,7 +34,7 @@ labels stay comparable across refits.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -43,11 +43,12 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 from regime_trader.calibration import state_calibration
-from regime_trader.engine import playbook_for
+from regime_trader.engine import EngineState, playbook_for
 from regime_trader.features import Z_FEATURES
 from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
 from regime_trader.playbook import Playbook, evaluate_signal
 from regime_trader.sizing import kelly_fraction
+from regime_trader.switching import INITIAL
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -99,7 +100,9 @@ def drift_report(
     mean_shift = np.abs(new.hmm.means[new_index] - previous.hmm.means[old_index]) / old_sd
     mean_shift_sd = float(mean_shift.max()) if common else 0.0
 
-    live_mean, threshold = likelihood_alarm(live_ll, insample_ll, config)
+    window = config.ll_window
+    threshold = likelihood_floor(insample_ll, config)
+    live_mean = float(np.mean(live_ll[-window:])) if len(live_ll) >= window else float("nan")
 
     reasons = []
     if transition_shift > config.max_transition_shift:
@@ -114,17 +117,17 @@ def drift_report(
     return DriftReport(transition_shift, mean_shift_sd, live_mean, threshold, bool(reasons), tuple(reasons))
 
 
-def likelihood_alarm(
-    live_ll: FloatArray, insample_ll: FloatArray, config: DriftConfig
-) -> tuple[float, float]:
-    """(mean live log-likelihood over the last window, the in-sample floor).
-    The mean is NaN until a full window of live bars exists; the alarm is
-    `mean < floor`."""
+def likelihood_floor(insample_ll: FloatArray, config: DriftConfig) -> float:
+    """The `ll_percentile`-th percentile of in-sample rolling-window mean
+    log-likelihoods: live fit quality below it is drift."""
     window = config.ll_window
-    rolling_insample = np.convolve(insample_ll, np.ones(window) / window, mode="valid")
-    floor = float(np.percentile(rolling_insample, config.ll_percentile)) if len(rolling_insample) else -np.inf
-    live_mean = float(np.mean(live_ll[-window:])) if len(live_ll) >= window else float("nan")
-    return live_mean, floor
+    rolling = np.convolve(insample_ll, np.ones(window) / window, mode="valid")
+    return float(np.percentile(rolling, config.ll_percentile)) if len(rolling) else -np.inf
+
+
+def rolling_alarm(live_ll: Sequence[float], floor: float, window: int) -> bool:
+    """True once a full window of live log-likelihoods averages below `floor`."""
+    return len(live_ll) >= window and float(np.mean(live_ll[-window:])) < floor
 
 
 BARS_PER_SESSION = 7
@@ -147,6 +150,12 @@ class Fit:
     prior: FloatArray  # the filter's prior for the bar after `trained_through`
     trained_through: pd.Timestamp
     calibrated: bool = False  # False: sizing falls back to a fixed quarter of the cap
+    drift: DriftReport | None = None  # against the previous fit; None for a first fit
+    ll_floor: float = -np.inf  # the live likelihood alarm's floor (`likelihood_floor`)
+
+    @property
+    def drifted(self) -> bool:
+        return self.drift is not None and self.drift.drifted
 
 
 def state_kelly(
@@ -180,6 +189,7 @@ def fit_regime(
     playbooks: Mapping[str, Playbook],
     config: FitConfig,
     previous: Fit | None = None,
+    drift: DriftConfig | None = None,
 ) -> Fit:
     """Fit on `features` (healthy training rows only). With a `previous`
     fit, keep its state count, match its labels and score its calibration."""
@@ -195,6 +205,8 @@ def fit_regime(
     if previous is not None:
         model = match_labels(previous.model, model)
     filtered = forward_filter(model.hmm, z)
+    drift = drift or DriftConfig()
+    no_live = np.empty(0)  # the live-likelihood half of drift is watched bar by bar (`rolling_alarm`)
     return Fit(
         model=model,
         kelly=state_kelly(model, features, filtered.filtered.argmax(axis=1), next_returns, playbooks),
@@ -202,7 +214,21 @@ def fit_regime(
         prior=filtered.next_state[-1],
         trained_through=pd.Timestamp(features.index[-1]),
         calibrated=_score_calibration(previous, model, features),
+        drift=drift_report(previous.model, model, no_live, previous.insample_ll, drift) if previous else None,
+        ll_floor=likelihood_floor(filtered.log_likelihood, drift),
     )
+
+
+def adopt_fit(state: EngineState | None, fit: Fit) -> EngineState:
+    """Install a (re)fit, the same way in the backtest and live. The filter
+    restarts from the fit's prior; the position carries over; the switching
+    state carries over while every state it names still exists (labels are
+    matched across refits), and otherwise starts again."""
+    if state is None:
+        return EngineState(prior=fit.prior, switch=INITIAL, position=None)
+    named = {state.switch.active, state.switch.challenger} - {None}
+    switch = state.switch if named <= set(fit.model.labels) else INITIAL
+    return EngineState(prior=fit.prior, switch=switch, position=state.position)
 
 
 def _score_calibration(previous: Fit | None, judge: RegimeModel, features: pd.DataFrame) -> bool:
