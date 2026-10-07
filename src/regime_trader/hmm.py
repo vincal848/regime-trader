@@ -48,9 +48,12 @@ class HmmModel:
     def _cholesky(self) -> tuple[FloatArray, FloatArray]:
         """Each state's Cholesky factor and Gaussian log normalizer, factorised
         once per model instead of once per bar."""
-        factors = np.linalg.cholesky(self.covars)  # (K, D, D); hmmlearn keeps covariances positive definite
+        # (K, D, D); hmmlearn keeps covariances positive definite
+        factors: FloatArray = np.asarray(np.linalg.cholesky(self.covars), dtype=np.float64)
         log_det = 2.0 * np.log(np.diagonal(factors, axis1=1, axis2=2)).sum(axis=1)
-        log_norm = -0.5 * (self.n_features * math.log(2.0 * math.pi) + log_det)
+        log_norm: FloatArray = np.asarray(
+            -0.5 * (self.n_features * math.log(2.0 * math.pi) + log_det), dtype=np.float64
+        )
         return factors, log_norm
 
 

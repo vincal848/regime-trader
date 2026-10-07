@@ -426,3 +426,8 @@ tests first; the refactors were checked against the existing suite.
   mapping is longer but obvious, and safe to change.
 - A shared test playbook builder, and the dashboard's per-rerun JSON
   parsing. These are test-only or cost milliseconds.
+
+### CI fix
+- First GitHub push: mypy failed on CI because the newer numpy stubs there
+  type `np.linalg.cholesky` as `floating[Any]`. The cached Cholesky factors
+  and log normalizers are now explicitly float64.
