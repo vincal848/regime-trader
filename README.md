@@ -1,110 +1,138 @@
 # Regime Trader
 
-An hourly SPY strategy for an Interactive Brokers **paper** account. A
-different playbook trades in each hidden market regime:
+[![ci](https://github.com/vincal848/regime-trader/actions/workflows/ci.yml/badge.svg)](https://github.com/vincal848/regime-trader/actions/workflows/ci.yml)
 
-- **A Gaussian Hidden Markov Model** reads the market state each hour.
-- **Claude (Opus 5.5)** researches and proposes the playbooks overnight.
-- **Deterministic code** makes every decision and enforces every limit.
+**An hourly SPY regime trader for an Interactive Brokers paper account: a
+Gaussian HMM reads the market state, a different playbook trades each
+state, Claude proposes changes overnight, and deterministic code makes
+every decision and enforces every limit.**
 
-The models advise; the code decides.
+This started as a viral prompt for an "AI that trades market regimes". The
+idea has real content. Markets do move through persistent regimes, and a
+hidden Markov model is the textbook way to infer them. But taken literally,
+the prompt has four ways to fail:
 
-> **Status: paper only.** The build works end to end against fakes and
-> demo data, but no configuration has yet passed the acceptance gates.
-> Read [docs/GO_LIVE.md](docs/GO_LIVE.md): it lists exactly what is still
-> open, and answers the question "WHAT COULD BLOW UP THIS ACCOUNT?". The
-> code refuses live accounts and live ports.
+- a backtest that peeks at the future;
+- a model that sizes from overconfident probabilities;
+- a language model allowed to touch risk limits;
+- a nightly "self-improvement" loop that overfits the backtest.
 
-## Why it is built this way
+This build keeps the idea and closes each of those failure modes in code:
 
-The prompt this project started from asked for an AI-run regime trader.
-The design keeps what is useful in that idea and removes the ways it fails:
+1. **No look-ahead.** Decisions use only the HMM's *forward filter*
+   (P(state now | bars so far)). Smoothed and Viterbi inference is confined
+   to one offline calibration module, an architecture test enforces that,
+   and a future-perturbation test proves that changing later bars never
+   changes an earlier decision.
+2. **Sizing earns its inputs.** Size = min(¼ Kelly, state cap) × P(state) ×
+   (1 − entropy). Until a refit has shown the probabilities to be
+   *calibrated* out of sample, sizing falls back to a fixed quarter of the
+   cap.
+3. **The models advise; the code decides.** Hard limits live in `risk.py`,
+   which imports nothing but the bar schema: a daily loss cap, a sticky
+   kill switch, state caps, long/flat only, and manual approval above
+   $25,000. The account guard refuses anything but an IBKR paper account.
+4. **Self-improvement behind gates.** Claude's nightly proposals are parsed
+   by a whitelisted grammar, backtested outside a 12-month locked holdout,
+   counted against a multiple-testing tally, and never applied
+   automatically.
 
-| Risk in the idea | What the code does |
-|---|---|
-| A model that sees the future in a backtest | Decisions use only the **forward filter**: P(state now, given bars so far). Smoothed and Viterbi inference are confined to the offline calibration module, and an architecture test enforces it. A future-perturbation test checks that changing any later bar never changes an earlier decision |
-| A model that talks itself past its limits | Hard limits live in `risk.py`, which imports nothing but the bar schema. Playbook sizes are clipped to state caps in code. Claude's proposals are parsed by a whitelisted grammar and never applied automatically |
-| Overfitting through nightly self-improvement | Every proposal is backtested outside a 12-month **locked holdout**, the number of candidates tried is counted, and nothing ships without your approval and a commit |
-| Over-sizing on overconfident probabilities | Size = min(¼ Kelly, state cap) × P(state) × (1 − entropy). Until a refit has shown the probabilities to be **calibrated** out of sample, sizing falls back to a fixed quarter of the cap |
-| Unattended failure | Stale data, exceptions, disconnections, repeated rejects, the drawdown limit and bad equity reads all end flat, with an alert. The kill switch is sticky across restarts |
+The full specification is **[docs/SPEC.md](docs/SPEC.md)**, the design
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**, the build plan
+**[docs/PLAN.md](docs/PLAN.md)**, the demo results
+**[docs/DEMO.md](docs/DEMO.md)**, and every change, tests first,
+**[CHANGELOG.md](CHANGELOG.md)**.
+
+## Status
+
+All 11 plan steps are implemented, test-first: 245 tests at 95% coverage,
+`mypy --strict` and ruff. CI enforces the layer architecture. **It is paper
+only, and no configuration has passed the acceptance gates.**
+[docs/GO_LIVE.md](docs/GO_LIVE.md) answers "WHAT COULD BLOW UP THIS
+ACCOUNT?" and lists what is still open.
+
+| Area | Acceptance | Result |
+|---|---|---|
+| No look-ahead | A decision at bar t is unchanged when any later bar changes; smoothing is banned outside calibration | **met** (future-perturbation and AST architecture tests) |
+| Shared engine | The backtest and live trading call the same `engine.decide` and install refits the same way | **met**: one `decide`, one `adopt_fit` |
+| Hard limits | Every kill trigger flattens and halts; no limit is reachable from a model | **met** in tests (drawdown, manual, disconnect, reject and stale-data paths); paper drill open |
+| Calibration | Sizing uses probabilities only after a refit beats climatology out of sample | **met**; on real data only 6 of 22 refits qualified |
+| Nightly loop | Proposals are validated, backtested against the gates, and never applied | **met** (prompt-injection and grammar-rejection tests) |
+| Acceptance gates | Sharpe > 1.5, max drawdown < 15%, hit rate > 55%, t > 2, beats buy-and-hold and the best static strategy | **not met** on the Yahoo demo: Sharpe −0.96 against buy-and-hold's 1.08 ([DEMO.md](docs/DEMO.md)). The real test needs IBKR history from 2018 |
+
+## Quick start
+
+```bash
+pip install -e ".[dev]"     # add ,ibkr,llm,dashboard,demo as needed
+pytest -q                   # 245 tests
+ruff check . && mypy        # lint, strict types
+```
+
+The demo walk-forward needs no broker; Yahoo data stays local in `demo/`:
+
+```bash
+pip install -e ".[demo]"
+mkdir demo && cp -r playbooks demo/
+regime-trader --root demo fetch --source yahoo
+regime-trader --root demo backtest --test-start 2025-01-02 --no-holdout
+python scripts/demo_walkforward.py demo 2025-01-02     # per-state and per-refit detail
+```
+
+Paper trading, with the full Windows setup in
+[docs/DEPLOY_WINDOWS.md](docs/DEPLOY_WINDOWS.md):
+
+```bash
+regime-trader fetch          # hourly bars from IB Gateway
+regime-trader fit            # fit or refit; reports drift and calibration
+regime-trader backtest       # walk-forward against the gates (exit 1 when they fail)
+regime-trader live           # the paper trader
+regime-trader kill [--reset] # sticky kill switch
+regime-trader approve --minutes 60
+regime-trader nightly        # daily report, Claude review, proposal backtests
+regime-trader dashboard
+```
 
 ## How a bar flows
 
 ```
-IB Gateway ─► completed hourly bar ─► features (past-only, z-scored on t−1 statistics)
-          ─► HMM forward filter ─► switching rules (hysteresis, cooldown, early cut)
-          ─► playbook for the active state ─► size (Kelly × probability × certainty)
+IB Gateway ─► completed hourly bar ─► causal features (z-scored on t−1 statistics)
+          ─► HMM forward filter ─► switching (hysteresis, cooldown, early stress cut)
+          ─► the active state's playbook ─► size (¼ Kelly × probability × certainty)
           ─► risk.check_order (caps, daily loss, kill switch, $25k approval)
           ─► marketable limit order (±5 bps) ─► journal + Telegram
 ```
 
-The backtest and the live trader call the same `engine.decide`, so the
-code that is tested is the code that trades.
+## Repository guide
 
-## Layout
-
-| Layer | Modules | Rule |
-|---|---|---|
-| 0 core | `bars`, `features`, `hmm`, `switching`, `playbook`, `sizing`, `risk`, `metrics` | Pure functions, no I/O |
-| 1 engine | `engine` | One bar in, one decision out |
-| 2 research | `refit`, `backtest`, `calibration` | Walk-forward, gates, drift; no I/O |
-| 3 adapters | `store`, `ibkr`, `yahoo`, `alerts`, `llm` | All I/O lives here |
-| 4 apps | `live`, `nightly`, `dashboard`, `cli` | Wiring |
-
-`tests/test_architecture.py` enforces the layering. Details are in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Quick start (demo data, no broker)
-
-```powershell
-py -3.13 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[demo,dev]"
-mkdir demo; xcopy playbooks demo\playbooks\ /E
-.venv\Scripts\regime-trader --root demo fetch --source yahoo
-.venv\Scripts\regime-trader --root demo backtest --test-start 2025-01-02 --no-holdout
-```
-
-Yahoo's free hourly history covers about two to three years. That is
-enough to watch the pipeline work, but not enough for the real acceptance
-test (spec §11), which runs on IBKR history from 2018. The demo's results
-are in [docs/DEMO.md](docs/DEMO.md).
-
-## Paper trading
-
-[docs/DEPLOY_WINDOWS.md](docs/DEPLOY_WINDOWS.md) covers the full Windows
-setup: IB Gateway under IBC, the trader as an NSSM service, the nightly
-review, the watchdog and the monthly refit as scheduled tasks, and the
-power and update settings a trading PC needs.
-
-| Command | What it does |
+| Path | Contents |
 |---|---|
-| `regime-trader fetch` | Cache hourly bars (IBKR, or Yahoo for the demo) |
-| `regime-trader fit` | Fit, or refit, the regime model; reports drift and calibration |
-| `regime-trader backtest` | Walk-forward backtest against the gates; exit code 1 if they fail |
-| `regime-trader live` | Run the paper trader |
-| `regime-trader kill [--reset]` | The sticky kill switch |
-| `regime-trader approve --minutes N` | Allow orders over $25,000 for N minutes |
-| `regime-trader nightly` | Daily report, then the Claude review and proposal backtests |
-| `regime-trader dashboard` | The local dashboard |
+| `src/regime_trader/` | The package: 21 modules in 5 layers (core, engine, research, adapters, apps). See [ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| `tests/` | Tests per layer, plus architecture, future-perturbation and fake-broker live tests |
+| `playbooks/` | One Markdown playbook per state, each with a TOML block in a whitelisted condition grammar |
+| `scripts/demo_walkforward.py` | The reproducible demo run behind DEMO.md |
+| `docs/SPEC.md` | What the system must do, the decisions made, and the deviations from the original prompt |
+| `docs/ARCHITECTURE.md` | Layers, module contracts, state on disk |
+| `docs/PLAN.md` | The 11-step build plan, tests first |
+| `docs/DEMO.md` | The Yahoo demo walk-forward and what it shows |
+| `docs/GO_LIVE.md` | The go-live checklist and "WHAT COULD BLOW UP THIS ACCOUNT?" |
+| `docs/DEPLOY_WINDOWS.md` | IB Gateway under IBC, NSSM service, scheduled jobs, PC settings |
+| `CHANGELOG.md` | Every step: tests first, then implementation, then the defects found |
 
-Secrets (the Telegram token and Anthropic key) live in `.env` (see
-`.env.example`). They are never committed, logged or shown in a repr.
-IBKR needs no API key: you log in to IB Gateway yourself.
+## Data and secrets
 
-## Development
+No market data is committed. Bars, the journal, fitted models and
+proposals live in gitignored folders.
 
-```powershell
-.venv\Scripts\python -m pip install -e ".[ibkr,llm,dashboard,demo,dev]"
-.venv\Scripts\python -m ruff check src tests
-.venv\Scripts\python -m mypy src tests
-.venv\Scripts\python -m pytest --cov=regime_trader
-```
+- **IBKR (TWS API via `ib_async`).** Hourly RTH TRADES bars: the real
+  source for fitting, backtesting and trading.
+- **Yahoo Finance.** About three years of free hourly bars, enough for the
+  demo but not for acceptance.
 
-Every change follows the same order: failing tests, the implementation,
-then a [CHANGELOG.md](CHANGELOG.md) entry. Rollback is `git revert`. The
-spec is [docs/SPEC.md](docs/SPEC.md) and the build plan
-[docs/PLAN.md](docs/PLAN.md).
+IBKR needs no API key: you log in to IB Gateway yourself. The Telegram
+token and Anthropic key live in `.env` (`.env.example` lists the names).
+They are never committed, logged or shown in a repr. Telegram is outbound
+only, so a chat message can never trade.
 
 ## License
 
-MIT. Not investment advice. Trading on these signals can lose money.
+MIT © 2026 Caleb Vinson. Not investment advice.
