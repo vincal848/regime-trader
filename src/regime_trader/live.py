@@ -380,7 +380,11 @@ class Trader:
         )
         price = float(bars["close"].iloc[-1])
         row = {str(k): float(v) for k, v in features.iloc[-1].items()}
-        engine_config = replace(self.config.engine, entries_frozen=cp.entries_frozen)
+        engine_config = replace(
+            self.config.engine,
+            entries_frozen=cp.entries_frozen,
+            calibrated=self.config.engine.calibrated and self.fit.calibrated,
+        )
         engine, decision = engine_decide(
             engine,
             latest,

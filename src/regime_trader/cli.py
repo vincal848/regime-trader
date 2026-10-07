@@ -154,10 +154,11 @@ def _fit(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) -> int:
     features, next_returns = _training_set(bars)
     previous = load_fit(paths.fit) if paths.fit.exists() else None
     playbooks = load_playbooks(paths.playbooks)
-    previous_model = previous.model if previous else None
-    fit = fit_regime(features, next_returns, playbooks, _fit_config(args), previous_model)
+    fit = fit_regime(features, next_returns, playbooks, _fit_config(args), previous)
     print(f"fit {fit.model.hmm.n_states} states through {fit.trained_through}: {', '.join(fit.model.labels)}")
     print("kelly: " + ", ".join(f"{k} {v:.2f}" for k, v in fit.kelly.items()))
+    sizing = "probability-weighted" if fit.calibrated else "a fixed quarter of the cap (not yet calibrated)"
+    print(f"sizing: {sizing}")
     if previous is not None:
         drift = drift_report(previous.model, fit.model, np.empty(0), previous.insample_ll, DriftConfig())
         verdict = "ALARM: " + "; ".join(drift.reasons) if drift.drifted else "none"

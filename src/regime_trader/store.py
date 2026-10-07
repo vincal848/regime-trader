@@ -107,6 +107,7 @@ def save_fit(path: Path, fit: Fit) -> None:
         "insample_ll": fit.insample_ll.tolist(),
         "prior": fit.prior.tolist(),
         "trained_through": fit.trained_through.isoformat(),
+        "calibrated": fit.calibrated,
     }
     _write_json(path, payload)
 
@@ -119,6 +120,7 @@ def load_fit(path: Path) -> Fit:
         insample_ll=_array(data, "insample_ll"),
         prior=_array(data, "prior"),
         trained_through=pd.Timestamp(data["trained_through"]),
+        calibrated=bool(data.get("calibrated", False)),
     )
 
 

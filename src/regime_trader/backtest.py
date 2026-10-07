@@ -46,7 +46,6 @@ from regime_trader.engine import (
     start,
 )
 from regime_trader.features import compute_features, healthy
-from regime_trader.hmm import RegimeModel
 from regime_trader.metrics import (
     GateResult,
     Gates,
@@ -58,7 +57,7 @@ from regime_trader.metrics import (
     t_statistic,
 )
 from regime_trader.playbook import Playbook, evaluate_signal
-from regime_trader.refit import DriftConfig, DriftReport, FitConfig, drift_report, fit_regime
+from regime_trader.refit import DriftConfig, DriftReport, Fit, FitConfig, drift_report, fit_regime
 from regime_trader.risk import AccountState, Approved, check_order, kill_reasons, state_cap
 
 FloatArray = npt.NDArray[np.float64]
@@ -120,6 +119,7 @@ class RefitRecord:
     labels: tuple[str, ...]
     transmat: FloatArray
     drift: DriftReport | None  # None for the first fit
+    calibrated: bool
 
 
 @dataclass(frozen=True)
@@ -223,14 +223,12 @@ def run_backtest(
     sessions = index.tz_convert(TIMEZONE).normalize()
 
     portfolio = _Portfolio(config.initial_equity, config.costs)
-    model: RegimeModel | None = None
+    current: Fit | None = None
     state: EngineState | None = None
-    kelly: dict[str, float] = {}
     frozen, killed = False, False
     next_refit = index[0]
     refits: list[RefitRecord] = []
     live_ll: list[float] = []
-    insample_ll: FloatArray = np.empty(0)
     fills: list[Fill] = []
     pending: tuple[Decision, int] | None = None
     equity: list[float] = []
@@ -251,38 +249,39 @@ def run_backtest(
 
         if ts >= next_refit:
             past = (index < ts) & healthy_rows
-            fit = fit_regime(features[past], next_returns[past], playbooks, config.fit, model)
-            new_model = fit.model
+            new = fit_regime(features[past], next_returns[past], playbooks, config.fit, current)
             drift = None
-            if model is not None:
-                drift = drift_report(model, new_model, np.array(live_ll), insample_ll, config.drift)
+            if current is not None:
+                live = np.array(live_ll)
+                drift = drift_report(current.model, new.model, live, current.insample_ll, config.drift)
                 frozen = drift.drifted
-            kelly = fit.kelly
-            state = start(new_model) if state is None else state
-            state = EngineState(prior=fit.prior, switch=state.switch, position=state.position)
-            model, insample_ll, live_ll = new_model, fit.insample_ll, []
+            state = start(new.model) if state is None else state
+            state = EngineState(prior=new.prior, switch=state.switch, position=state.position)
+            current, live_ll = new, []
+            hmm = new.model.hmm
             refits.append(
-                RefitRecord(ts, new_model.hmm.n_states, new_model.labels, new_model.hmm.transmat, drift)
+                RefitRecord(ts, hmm.n_states, new.model.labels, hmm.transmat, drift, new.calibrated)
             )
             next_refit = ts + pd.Timedelta(days=config.refit_days)
 
-        assert model is not None  # the first bar always refits
+        assert current is not None  # the first bar always refits
         assert state is not None
         if i > first and sessions[i] != sessions[i - 1]:
             start_of_day = equity[-1]
         mark = portfolio.mark(closes[i])
         peak = max(peak, mark)
         account = AccountState(mark, start_of_day, peak, portfolio.shares, 0, 0.0, killed)
-        engine_config = replace(config.engine, entries_frozen=frozen)
+        calibrated = config.engine.calibrated and current.calibrated
+        engine_config = replace(config.engine, entries_frozen=frozen, calibrated=calibrated)
         state, decision = decide(
             state,
             ts,
             rows[i],
             float(closes[i]),
             account,
-            model,
+            current.model,
             playbooks,
-            kelly,
+            current.kelly,
             engine_config,
             bool(healthy_rows[i]),
         )

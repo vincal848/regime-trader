@@ -22,7 +22,11 @@ window, bundled so the backtest and live trading build it the same way:
 - each state's Kelly estimate, from the next-bar returns where that state
   led and its playbook would have entered;
 - the in-sample log-likelihoods, for the drift alarm;
-- the filter's prior for the bar after the window.
+- the filter's prior for the bar after the window;
+- whether sizing may use the model's probabilities (`calibrated`, spec §9).
+  A first fit is not calibrated. Each refit scores the previous fit's
+  one-bar-ahead predictions over the bars since it was trained, against the
+  new fit's hindsight states, and carries the verdict forward.
 
 The state count is chosen once (`select_states`) and then held fixed, so
 labels stay comparable across refits.
@@ -38,6 +42,7 @@ import numpy.typing as npt
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
+from regime_trader.calibration import state_calibration
 from regime_trader.engine import playbook_for
 from regime_trader.features import Z_FEATURES
 from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
@@ -123,6 +128,7 @@ def likelihood_alarm(
 
 
 BARS_PER_SESSION = 7
+MIN_CALIBRATION_BARS = 10 * BARS_PER_SESSION  # fewer new bars: keep the previous verdict
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ class Fit:
     insample_ll: FloatArray  # per-bar log-likelihood over the training window
     prior: FloatArray  # the filter's prior for the bar after `trained_through`
     trained_through: pd.Timestamp
+    calibrated: bool = False  # False: sizing falls back to a fixed quarter of the cap
 
 
 def state_kelly(
@@ -172,10 +179,10 @@ def fit_regime(
     next_returns: FloatArray,
     playbooks: Mapping[str, Playbook],
     config: FitConfig,
-    previous: RegimeModel | None = None,
+    previous: Fit | None = None,
 ) -> Fit:
     """Fit on `features` (healthy training rows only). With a `previous`
-    model, keep its state count and match its labels."""
+    fit, keep its state count, match its labels and score its calibration."""
     z = features[list(Z_FEATURES)].to_numpy()
     if previous is None:
         held_out = config.validation_days * BARS_PER_SESSION
@@ -183,10 +190,10 @@ def fit_regime(
             z[:-held_out], z[-held_out:], config.candidates, config.restarts, config.seed
         ).n_states
     else:
-        n_states = previous.hmm.n_states
+        n_states = previous.model.hmm.n_states
     model = characterize(fit_hmm(z, n_states, config.restarts, config.seed), z, features["ret"].to_numpy())
     if previous is not None:
-        model = match_labels(previous, model)
+        model = match_labels(previous.model, model)
     filtered = forward_filter(model.hmm, z)
     return Fit(
         model=model,
@@ -194,4 +201,16 @@ def fit_regime(
         insample_ll=filtered.log_likelihood,
         prior=filtered.next_state[-1],
         trained_through=pd.Timestamp(features.index[-1]),
+        calibrated=_score_calibration(previous, model, features),
     )
+
+
+def _score_calibration(previous: Fit | None, judge: RegimeModel, features: pd.DataFrame) -> bool:
+    """Score `previous` out of sample: on the bars after its training window,
+    against the hindsight states of the newer model `judge`."""
+    if previous is None:
+        return False
+    after = features[pd.DatetimeIndex(features.index) > previous.trained_through]
+    if len(after) < MIN_CALIBRATION_BARS:
+        return previous.calibrated
+    return state_calibration(previous.model, after[list(Z_FEATURES)].to_numpy(), reference=judge).calibrated

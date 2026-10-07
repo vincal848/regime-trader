@@ -81,11 +81,12 @@ def state_calibration(
 ) -> CalibrationReport:
     """Score `model`'s one-step-ahead predictions against hindsight states
     from `reference` (by default the model itself, e.g. the next refit)."""
-    truth = smoothed_states(reference if reference is not None else model, x)[1:]
+    judge = reference if reference is not None else model
+    hindsight = np.array(judge.labels)[smoothed_states(judge, x)][1:]  # matched by label, not index
     predicted = forward_filter(model.hmm, x).next_state[:-1]
     states = []
     for k, label in enumerate(model.labels):
-        outcomes = (truth == k).astype(np.int64)
+        outcomes = (hindsight == label).astype(np.int64)
         base_rate = float(outcomes.mean())
         states.append(
             StateCalibration(
