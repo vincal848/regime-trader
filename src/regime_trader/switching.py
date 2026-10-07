@@ -70,8 +70,8 @@ def step_switch(
 ) -> tuple[SwitchState, Regime]:
     state = replace(state, cooldown=max(state.cooldown - 1, 0))
     if not healthy:
-        reasons = ("unhealthy input (model error, stale or invalid data): flat",)
-        return replace(state, challenger=None, streak=0), Regime(state.active, False, 0.0, reasons)
+        unhealthy = ("unhealthy input (model error, stale or invalid data): flat",)
+        return replace(state, challenger=None, streak=0), Regime(state.active, False, 0.0, unhealthy)
 
     order = np.argsort(filtered)[::-1]
     leader, leader_p, runner_up_p = labels[order[0]], float(filtered[order[0]]), float(filtered[order[1]])
