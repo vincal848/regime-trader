@@ -34,7 +34,7 @@ def test_bad_bars_are_rejected(corrupt: object, message: str) -> None:
 
 def test_bar_of_day_counts_position_within_each_session() -> None:
     bars = make_bars(3)
-    assert list(bar_of_day(bars.index)) == [0, 1, 2, 3, 4, 5, 6] * 3
+    assert list(bar_of_day(pd.DatetimeIndex(bars.index))) == [0, 1, 2, 3, 4, 5, 6] * 3
 
 
 def test_bar_of_day_works_on_the_yahoo_half_hour_grid() -> None:
@@ -54,9 +54,11 @@ def test_feature_columns() -> None:
 
 
 def test_features_become_finite_after_the_warm_up() -> None:
+    # The volume ratio needs 20 prior sessions, and its z-score then needs
+    # MIN_HISTORY (140) values of its own: about 41 sessions in all.
     frame = compute_features(make_bars(60))
     assert frame.iloc[: 7 * 20].isna().any(axis=None)
-    assert np.isfinite(frame.iloc[7 * 30 :].to_numpy()).all()
+    assert np.isfinite(frame.iloc[7 * 42 :].to_numpy()).all()
 
 
 def test_no_feature_at_t_depends_on_any_later_bar() -> None:
@@ -64,11 +66,10 @@ def test_no_feature_at_t_depends_on_any_later_bar() -> None:
     base = compute_features(bars)
     rng = np.random.default_rng(2)
     for t in rng.integers(150, len(bars) - 5, size=8):
-        future = bars.copy()
-        scale = np.exp(rng.normal(0.0, 0.05, len(bars) - t - 1))
-        for column in ("open", "high", "low", "close"):
-            future.iloc[t + 1 :, future.columns.get_loc(column)] *= scale
-        future.iloc[t + 1 :, future.columns.get_loc("volume")] *= 3.0
+        values = bars.to_numpy(copy=True)
+        values[t + 1 :, :4] *= np.exp(rng.normal(0.0, 0.05, len(bars) - t - 1))[:, None]
+        values[t + 1 :, 4] *= 3.0
+        future = pd.DataFrame(values, index=bars.index, columns=bars.columns)
         perturbed = compute_features(future)
         pd.testing.assert_frame_equal(perturbed.iloc[: t + 1], base.iloc[: t + 1])
 
