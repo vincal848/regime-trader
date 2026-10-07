@@ -1,5 +1,6 @@
 """Step 4: switching rules (spec §8), sizing (§9) and hard risk limits (§10)."""
 
+import math
 from dataclasses import replace
 
 import numpy as np
@@ -192,6 +193,11 @@ def test_large_orders_need_manual_approval() -> None:
     result = check_order(LIMITS, _account(), "CALM_UP", target_shares=60, price=PRICE)  # $30,000 > $25,000
     assert isinstance(result, Approved)
     assert result.needs_manual_approval
+
+
+def test_disconnection_kills_even_before_any_equity_is_known() -> None:
+    account = AccountState(math.nan, math.nan, 0.0, 0, 0, 301.0, False)
+    assert any("disconnected" in reason for reason in kill_reasons(LIMITS, account))
 
 
 def test_base_state_strips_only_the_numbering() -> None:

@@ -37,7 +37,16 @@ from regime_trader.live import Control, LiveConfig, Trader, missed_bar, next_bar
 from regime_trader.llm import SYSTEM_PROMPT, NightlyReviewer, RawReview, SpendLedger, Usage
 from regime_trader.nightly import daily_report, day_record, extract_playbooks, run_nightly
 from regime_trader.playbook import Playbook, parse_playbook
-from regime_trader.refit import DriftConfig, Fit, FitConfig, fit_regime, likelihood_alarm
+from regime_trader.refit import (
+    DriftConfig,
+    DriftReport,
+    Fit,
+    FitConfig,
+    adopt_fit,
+    fit_regime,
+    likelihood_floor,
+    rolling_alarm,
+)
 from regime_trader.risk import RiskLimits
 from regime_trader.store import BarCache, Journal, load_fit, load_playbooks
 
@@ -111,12 +120,34 @@ def test_a_refit_keeps_the_state_count_and_the_labels(fit: Fit) -> None:
 
 
 def test_the_likelihood_alarm_compares_rolling_means_to_the_in_sample_floor() -> None:
-    config = DriftConfig(ll_window=5, ll_percentile=1.0)
-    early_mean, _ = likelihood_alarm(np.full(4, -9.0), np.zeros(100), config)
-    assert math.isnan(early_mean)
-    mean, threshold = likelihood_alarm(np.full(5, -9.0), np.zeros(100), config)
-    assert mean == -9.0
-    assert threshold == 0.0
+    floor = likelihood_floor(np.zeros(100), DriftConfig(ll_window=5, ll_percentile=1.0))
+    assert floor == 0.0
+    assert not rolling_alarm([-9.0] * 4, floor, window=5)  # not a full window yet
+    assert rolling_alarm([-9.0] * 5, floor, window=5)
+    assert not rolling_alarm([1.0] * 5, floor, window=5)
+
+
+def test_a_fit_carries_its_likelihood_floor_and_refit_drift(fit: Fit) -> None:
+    assert fit.drift is None  # a first fit has nothing to drift from
+    assert fit.ll_floor == likelihood_floor(fit.insample_ll, DriftConfig())
+    later = _fit(FIT_END + 7 * 30, previous=fit)
+    assert later.drift is not None
+
+
+def test_adopting_a_refit_keeps_the_regime_and_the_position(fit: Fit) -> None:
+    from regime_trader.engine import EngineState, OpenPosition
+    from regime_trader.switching import SwitchState
+
+    label = fit.model.labels[0]
+    held = OpenPosition(label, 10, 500.0, 480.0, 550.0, 3)
+    state = EngineState(prior=np.array([0.5, 0.5]), switch=SwitchState(label, None, 0, 0), position=held)
+    adopted = adopt_fit(state, fit)
+    assert adopted.switch == state.switch
+    assert adopted.position == held
+    np.testing.assert_array_equal(adopted.prior, fit.prior)
+    gone = adopt_fit(replace(state, switch=SwitchState("CHOP_9", None, 0, 0)), fit)
+    assert gone.switch.active is None  # the active state no longer exists: switching starts again
+    assert adopt_fit(None, fit).position is None
 
 
 # --- live: harness -------------------------------------------------------------------------
@@ -424,6 +455,9 @@ def test_an_implausible_equity_read_is_refused(tmp_path: Path, fit: Fit) -> None
     rig.step(40)
     assert all(target * 600 < 200_000 for _, target in rig.broker.orders)
     assert "equity" in rig.alerts.texts("error")
+    decisions = rig.journal.decisions()
+    assert len(decisions) == 42  # refused reads still produce a journaled, flat decision
+    assert "unhealthy" in decisions["reasons"].iloc[-1]
 
 
 def test_live_likelihood_drift_freezes_entries(tmp_path: Path, fit: Fit) -> None:
@@ -431,6 +465,27 @@ def test_live_likelihood_drift_freezes_entries(tmp_path: Path, fit: Fit) -> None
     rig = _rig(tmp_path, paranoid, replace(NO_APPROVAL, drift=DriftConfig(ll_window=1)))
     rig.step(60)
     assert "drift" in rig.alerts.kinds()
+    assert rig.broker.orders == []
+
+
+def test_a_refit_does_not_close_the_position_live(tmp_path: Path, fit: Fit) -> None:
+    rig = _rig(tmp_path, fit, NO_APPROVAL)
+    _until_long(rig)
+    rig.step()
+    held = rig.broker.shares
+    refit = replace(_fit(rig.next_bar, previous=fit), calibrated=True)
+    rig.trader = _trader(tmp_path, rig.broker, refit, rig.alerts, rig.config)
+    rig.fit = refit
+    (decision,) = rig.step()
+    assert decision is not None
+    assert decision.regime.active is not None
+    assert rig.broker.shares == held
+
+
+def test_a_drifted_refit_starts_with_entries_frozen(tmp_path: Path, fit: Fit) -> None:
+    drifted = DriftReport(0.5, 0.0, math.nan, 0.0, True, ("transition probability shifted by 0.500",))
+    rig = _rig(tmp_path, replace(fit, drift=drifted), NO_APPROVAL)
+    rig.step(60)
     assert rig.broker.orders == []
 
 

@@ -20,6 +20,7 @@ from regime_trader.backtest import (
     summarize,
 )
 from regime_trader.playbook import Playbook, parse_playbook
+from regime_trader.refit import DriftConfig
 
 N_DAYS = 330
 BARS = make_regime_bars(N_DAYS, seed=3)
@@ -94,6 +95,12 @@ def test_sizing_waits_for_calibration(result: BacktestResult) -> None:
     window = (result.positions.index >= first.ts) & (result.positions.index < second.ts)
     notional = (result.positions * BARS["close"].reindex(result.positions.index))[window]
     assert (notional <= 0.25 * result.equity[window] + 1e-6).all()
+
+
+def test_a_likelihood_alarm_freezes_entries_mid_window() -> None:
+    nervous = replace(CONFIG, drift=DriftConfig(ll_window=1, ll_percentile=100.0))  # every bar alarms
+    frozen = run_backtest(BARS, PLAYBOOKS, nervous)
+    assert frozen.fills == ()
 
 
 def test_cash_accounting_reconciles(result: BacktestResult) -> None:
