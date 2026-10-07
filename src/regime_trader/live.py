@@ -49,6 +49,7 @@ from regime_trader.engine import (
     Fill,
     OpenPosition,
     open_position,
+    playbook_for,
 )
 from regime_trader.engine import decide as engine_decide
 from regime_trader.features import Z_FEATURES, compute_features
@@ -486,9 +487,9 @@ class Trader:
             return None
         if current is not None:
             return replace(current, shares=shares)
-        active = decision.regime.active if decision else None
-        if decision is not None and active is not None and active in self.playbooks and math.isfinite(price):
-            return open_position(self.playbooks[active], shares, price, decision.entry_rv)
+        playbook = playbook_for(self.playbooks, decision.regime.active) if decision else None
+        if decision is not None and playbook is not None and math.isfinite(price):
+            return open_position(playbook, shares, price, decision.entry_rv)
         return OpenPosition(EXTERNAL, shares, math.nan, 0.0, math.inf, 0)  # closed by the engine
 
     def _catch_up(self, features: pd.DataFrame, latest: pd.Timestamp) -> EngineState:

@@ -37,6 +37,7 @@ from regime_trader.risk import (
     Approved,
     RiskLimits,
     Vetoed,
+    base_state,
     check_order,
     daily_loss_breached,
     kill_reasons,
@@ -99,6 +100,12 @@ class Decision:
     reasons: tuple[str, ...]
 
 
+def playbook_for(playbooks: Mapping[str, Playbook], label: str | None) -> Playbook | None:
+    """The playbook a state trades: numbered siblings share their base
+    state's playbook (CALM_UP_1 and CALM_UP_2 both trade CALM_UP)."""
+    return None if label is None else playbooks.get(base_state(label))
+
+
 def start(model: RegimeModel) -> EngineState:
     return EngineState(prior=initial_prior(model.hmm), switch=INITIAL, position=None)
 
@@ -158,17 +165,17 @@ def decide(
     fraction = 0.0
     target = 0
     kills = kill_reasons(config.limits, account)
+    playbook = playbook_for(playbooks, regime.active)
 
     if kills or daily_loss_breached(config.limits, account):
         reasons.append("hard limit: " + ("; ".join(kills) if kills else "daily loss limit") + ": flatten")
     elif not healthy or regime.active is None or regime.size_multiplier == 0.0:
         pass  # the switching reasons already explain why size is zero
-    elif regime.active not in playbooks:
+    elif playbook is None:
         reasons.append(f"no playbook for {regime.active}: flat")
-    elif position is not None and position.playbook != regime.active:
-        reasons.append(f"playbook switched {position.playbook} -> {regime.active}: close")
+    elif position is not None and position.playbook != playbook.state:
+        reasons.append(f"playbook switched {position.playbook} -> {playbook.state}: close")
     else:
-        playbook = playbooks[regime.active]
         fraction, sized = _sized_shares(
             probabilities,
             regime.active,
@@ -226,10 +233,10 @@ def on_fill(
         return replace(state, position=None)
     if state.position is not None:
         return replace(state, position=replace(state.position, shares=shares))
-    active = decision.regime.active
-    if active is None or active not in playbooks:
-        raise ValueError(f"fill opened a position without an active playbook ({active})")
-    return replace(state, position=open_position(playbooks[active], shares, fill_price, decision.entry_rv))
+    playbook = playbook_for(playbooks, decision.regime.active)
+    if playbook is None:
+        raise ValueError(f"fill opened a position without an active playbook ({decision.regime.active})")
+    return replace(state, position=open_position(playbook, shares, fill_price, decision.entry_rv))
 
 
 def open_position(playbook: Playbook, shares: int, fill_price: float, rv: float) -> OpenPosition:

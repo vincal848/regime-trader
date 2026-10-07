@@ -16,6 +16,7 @@ from pathlib import Path
 import pandas as pd
 
 from regime_trader.bars import TIMEZONE
+from regime_trader.engine import playbook_for
 from regime_trader.hmm import expected_duration
 from regime_trader.live import load_checkpoint
 from regime_trader.nightly import round_trips
@@ -67,7 +68,7 @@ def dashboard_data(
         probabilities=probabilities,
         current_state=state,
         expected_remaining_bars=float(durations[labels.index(state)]) if state in labels else math.nan,
-        playbook=playbooks.get(state) if state else None,
+        playbook=playbook_for(playbooks, state),
         last_action="none"
         if last is None
         else f"{last['order_status']}: target {last['target_shares']} shares",

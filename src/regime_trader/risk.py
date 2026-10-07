@@ -52,11 +52,18 @@ class Vetoed:
     reason: str
 
 
+def base_state(label: str) -> str:
+    """The state a numbered label belongs to: CALM_UP_2 -> CALM_UP. Numbered
+    siblings share their base state's cap and playbook. Only a trailing
+    `_<digits>` is stripped, so an unmatched refit state (CALM_UP_NEW) stays
+    unknown until you review it."""
+    stem, _, suffix = label.rpartition("_")
+    return stem if stem and suffix.isdigit() else label
+
+
 def state_cap(limits: RiskLimits, label: str) -> float:
-    """The cap for a state label, matched on its base name (CALM_UP_2 -> CALM_UP).
-    A label the limits do not know gets zero."""
-    base = label.rstrip("0123456789").rstrip("_")
-    return limits.state_caps.get(base, 0.0)
+    """The cap for a state label, by its base state. Unknown states get zero."""
+    return limits.state_caps.get(base_state(label), 0.0)
 
 
 def kill_reasons(limits: RiskLimits, account: AccountState) -> tuple[str, ...]:

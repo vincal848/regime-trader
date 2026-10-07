@@ -13,8 +13,10 @@ import pandas as pd
 from regime_trader.bars import COLUMNS, SESSION_CLOSE, SESSION_OPEN, TIMEZONE
 
 
-def normalize_yahoo(raw: pd.DataFrame) -> pd.DataFrame:
-    """yfinance frame (single or multi-level columns) -> the bar schema, RTH only."""
+def normalize_yahoo(raw: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """yfinance frame (single or multi-level columns) -> the bar schema, RTH
+    only. With `now`, a bar that has not finished an hour by then is dropped:
+    Yahoo, like IB, includes the bar still forming."""
     frame = raw.copy()
     if isinstance(frame.columns, pd.MultiIndex):
         frame.columns = frame.columns.get_level_values(0)
@@ -26,6 +28,8 @@ def normalize_yahoo(raw: pd.DataFrame) -> pd.DataFrame:
     clock = frame.index - frame.index.normalize()
     frame = frame[(clock >= SESSION_OPEN) & (clock < SESSION_CLOSE)]
     frame = frame[list(COLUMNS)].astype(float).dropna()
+    if now is not None:
+        frame = frame[frame.index + pd.Timedelta(hours=1) <= now]
     return frame[frame["volume"] > 0]
 
 
@@ -33,4 +37,4 @@ def download_hourly(symbol: str, period: str = "730d") -> pd.DataFrame:
     import yfinance as yf
 
     raw = yf.download(symbol, period=period, interval="1h", progress=False, auto_adjust=False)
-    return normalize_yahoo(raw)
+    return normalize_yahoo(raw, now=pd.Timestamp.now(tz=TIMEZONE))

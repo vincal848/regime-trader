@@ -38,6 +38,7 @@ import numpy.typing as npt
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
+from regime_trader.engine import playbook_for
 from regime_trader.features import Z_FEATURES
 from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
 from regime_trader.playbook import Playbook, evaluate_signal
@@ -153,7 +154,7 @@ def state_kelly(
     rows = [{str(k): float(v) for k, v in row.items()} for row in features.to_dict("records")]
     kelly = {}
     for k, label in enumerate(model.labels):
-        playbook = playbooks.get(label)
+        playbook = playbook_for(playbooks, label)
         if playbook is None or playbook.max_size == 0:
             kelly[label] = 0.0
             continue
