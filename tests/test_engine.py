@@ -170,11 +170,12 @@ def test_no_decision_depends_on_a_future_bar() -> None:
 
     def run(frame: pd.DataFrame) -> list[tuple[str, int, str | None]]:
         features = compute_features(frame)
+        closes = frame["close"].to_numpy(dtype=float)
         state, out = start(MODEL), []
-        for ts, row in features.iterrows():
+        for i, (ts, row) in enumerate(features.iterrows()):
             values = {str(k): float(v) for k, v in row.items()}
             healthy = bool(np.isfinite(list(values.values())).all())
-            price = float(frame.at[ts, "close"])
+            price = float(closes[i])
             state, decision = decide(
                 state, pd.Timestamp(str(ts)), values, price, ACCOUNT, MODEL, PLAYBOOKS, KELLY, CONFIG, healthy
             )

@@ -96,3 +96,26 @@ then its implementation, then anything the review found.
 - Deviation from the spec: stops and take-profits are multiples of the
   existing 21-bar realized volatility (`stop_loss_vol`, `take_profit_vol`)
   instead of ATR. Same idea, no extra feature.
+
+### Step 6: engine
+- Tests first:
+  - `tests/test_engine.py`: a sized long on CALM_UP entry; flat on
+    unhealthy or NaN input; sizing never exceeds the state cap; CRASH never
+    enters and flattens; a playbook switch closes the old position; a close
+    through the stop exits; the kill switch flattens whatever the model
+    says; uncalibrated sizing falls back to a quarter of the cap; **no
+    decision depends on a future bar** (the full pipeline rerun after
+    perturbing every later bar, at 4 random cut points; probabilities
+    compared byte for byte).
+  - `tests/test_hmm.py`: the incremental `filter_step` equals the batch
+    filter.
+- Implementation:
+  - `hmm.filter_step` / `initial_prior`. `forward_filter` now runs the same
+    one-step `_update`, so one code path produces every probability.
+  - `engine.py`: frozen `EngineState`, `OpenPosition`, `Decision`;
+    `decide` (filter → switching → playbook → sizing → risk, with hard
+    limits first); `on_fill` sets stops and take-profits from the fill
+    price and the entry bar's realized volatility.
+- Design note: stops are evaluated at bar closes and exit at the next
+  open, in backtest and live alike. A gap can go through a stop. That is
+  recorded for the go-live risk list.

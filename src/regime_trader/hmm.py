@@ -70,28 +70,54 @@ def _emission_log_density(model: HmmModel, x: FloatArray) -> FloatArray:
     ).reshape(len(x), model.n_states)
 
 
+@dataclass(frozen=True)
+class FilterStep:
+    filtered: FloatArray  # (K,) P(s_t | x_..t)
+    next_state: FloatArray  # (K,) P(s_{t+1} | x_..t): the prior for the next bar
+    log_likelihood: float  # log p(x_t | x_..t-1)
+
+
+def initial_prior(model: HmmModel) -> FloatArray:
+    """The prior for the first bar: the start probabilities."""
+    prior: FloatArray = model.startprob.copy()
+    return prior
+
+
+def _update(model: HmmModel, prior: FloatArray, log_density: FloatArray) -> FilterStep:
+    """One forward step in log space: Bayes on the emission, then one transition."""
+    with np.errstate(divide="ignore"):  # a zero probability is a legitimate -inf in log space
+        joint = np.log(prior) + log_density
+    step_ll = float(logsumexp(joint))
+    filtered = np.exp(joint - step_ll)
+    return FilterStep(filtered, filtered @ model.transmat, step_ll)
+
+
+def filter_step(model: HmmModel, prior: FloatArray, x: FloatArray) -> FilterStep:
+    """Advance the filter by one observation `x` (D,). Feeding each step's
+    `next_state` back in as `prior` reproduces `forward_filter` exactly."""
+    if not np.isfinite(x).all():
+        raise ValueError("filter_step needs a finite observation")
+    return _update(model, prior, _emission_log_density(model, x[np.newaxis, :])[0])
+
+
 def forward_filter(model: HmmModel, x: FloatArray) -> FilterResult:
     """Filtered and next-state probabilities for every row of `x` (T, D).
 
-    Row t uses rows 0..t only. The recursion runs in log space and
-    normalizes every step, so long series neither underflow nor overflow.
+    Row t uses rows 0..t only. This is `filter_step` run over the rows, with
+    the emission densities computed in one vectorized pass.
     """
     if not np.isfinite(x).all():
         raise ValueError("forward_filter needs finite observations; drop the warm-up rows first")
     log_density = _emission_log_density(model, x)
-    with np.errstate(divide="ignore"):  # a zero probability is a legitimate -inf in log space
-        log_transmat = np.log(model.transmat)
-        log_prior = np.log(model.startprob)
-    n = len(x)
-    filtered = np.empty((n, model.n_states))
-    step_ll = np.empty(n)
-    for t in range(n):
-        joint = log_prior + log_density[t]
-        step_ll[t] = logsumexp(joint)
-        log_posterior = joint - step_ll[t]
-        filtered[t] = np.exp(log_posterior)
-        log_prior = logsumexp(log_posterior[:, None] + log_transmat, axis=0)
-    return FilterResult(filtered, filtered @ model.transmat, step_ll)
+    filtered = np.empty((len(x), model.n_states))
+    next_state = np.empty((len(x), model.n_states))
+    step_ll = np.empty(len(x))
+    prior = initial_prior(model)
+    for t in range(len(x)):
+        step = _update(model, prior, log_density[t])
+        filtered[t], next_state[t], step_ll[t] = step.filtered, step.next_state, step.log_likelihood
+        prior = step.next_state
+    return FilterResult(filtered, next_state, step_ll)
 
 
 def log_likelihood(model: HmmModel, x: FloatArray) -> float:
