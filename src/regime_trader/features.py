@@ -20,6 +20,7 @@ after t cannot change any row <= t (tests/test_bars_features.py).
 from __future__ import annotations
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from regime_trader.bars import bar_of_day
@@ -58,3 +59,10 @@ def compute_features(bars: pd.DataFrame) -> pd.DataFrame:
     past_std = raw.expanding(min_periods=MIN_HISTORY).std().shift(1)
     z = ((raw - past_mean) / past_std).add_prefix("z_")
     return pd.concat([raw, z], axis=1)
+
+
+def healthy(features: pd.DataFrame) -> npt.NDArray[np.bool_]:
+    """Rows where every raw and standardized feature is finite: the only
+    rows a model is fitted on or a decision is made from."""
+    mask: npt.NDArray[np.bool_] = np.isfinite(features[[*FEATURES, *Z_FEATURES]].to_numpy()).all(axis=1)
+    return mask

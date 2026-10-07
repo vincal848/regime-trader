@@ -94,7 +94,7 @@ def check_order(
     cap = min(limits.max_position_fraction, state_cap(limits, label))
     if exposure > cap and not reducing:
         return Vetoed(f"exposure {exposure:.1%} exceeds the {label} cap {cap:.0%}")
-    if kills:
-        return Approved(target_shares, needs_manual_approval=False)  # flattening never waits
-    notional = abs(target_shares - current) * price
+    if kills or reducing:
+        return Approved(target_shares, needs_manual_approval=False)  # reducing risk never waits
+    notional = (target_shares - current) * price
     return Approved(target_shares, needs_manual_approval=notional > limits.manual_approval_notional)

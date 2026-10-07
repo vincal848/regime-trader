@@ -17,7 +17,7 @@ from synthetic import make_bars
 from regime_trader.alerts import AlertError, NullAlerts, TelegramAlerts
 from regime_trader.engine import Fill
 from regime_trader.hmm import HmmModel, RegimeModel
-from regime_trader.ibkr import FillReport, IbkrBroker, PaperOnlyError, settings_from_env
+from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.llm import (
     OPUS_5_5,
     BudgetExceededError,
@@ -327,9 +327,9 @@ def test_fill_reports_sign_and_average_partial_fills() -> None:
         done=True,
     )
     report = broker.fill_report(sell)
-    assert report == FillReport(
-        filled=-100, average_price=pytest.approx(499.96), commission=pytest.approx(0.49), done=True
-    )
+    assert (report.filled, report.done) == (-100, True)
+    assert report.average_price == pytest.approx(499.96)
+    assert report.commission == pytest.approx(0.49)
     nothing = broker.fill_report(FakeTrade(FakeOrder("BUY", 10, 500.25), [], done=False))
     assert nothing.filled == 0
     assert not nothing.done

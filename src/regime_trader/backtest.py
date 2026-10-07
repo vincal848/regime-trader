@@ -45,16 +45,23 @@ from regime_trader.engine import (
     price_exit,
     start,
 )
-from regime_trader.features import FEATURES, Z_FEATURES, compute_features
-from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
-from regime_trader.metrics import daily_returns, hit_rate, max_drawdown, sharpe, t_statistic
+from regime_trader.features import compute_features, healthy
+from regime_trader.hmm import RegimeModel
+from regime_trader.metrics import (
+    GateResult,
+    Gates,
+    daily_returns,
+    evaluate_gates,
+    hit_rate,
+    max_drawdown,
+    sharpe,
+    t_statistic,
+)
 from regime_trader.playbook import Playbook, evaluate_signal
-from regime_trader.refit import DriftConfig, DriftReport, drift_report, match_labels
+from regime_trader.refit import DriftConfig, DriftReport, FitConfig, drift_report, fit_regime
 from regime_trader.risk import AccountState, Approved, check_order, kill_reasons, state_cap
-from regime_trader.sizing import kelly_fraction
 
 FloatArray = npt.NDArray[np.float64]
-BARS_PER_SESSION = 7
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,10 @@ class BacktestConfig:
     engine: EngineConfig = field(default_factory=EngineConfig)
     drift: DriftConfig = field(default_factory=DriftConfig)
     holdout_start: pd.Timestamp | None = None  # None: no locked holdout
+
+    @property
+    def fit(self) -> FitConfig:
+        return FitConfig(self.candidates, self.restarts, self.seed, self.validation_days)
 
 
 @dataclass(frozen=True)
@@ -181,42 +192,6 @@ def _rows(features: pd.DataFrame) -> list[dict[str, float]]:
     return [{str(k): float(v) for k, v in row.items()} for row in features.to_dict("records")]
 
 
-def _state_kelly(
-    model: RegimeModel, train: pd.DataFrame, next_returns: FloatArray, playbooks: Mapping[str, Playbook]
-) -> dict[str, float]:
-    leader = forward_filter(model.hmm, train[list(Z_FEATURES)].to_numpy()).filtered.argmax(axis=1)
-    rows = _rows(train)
-    kelly = {}
-    for k, label in enumerate(model.labels):
-        playbook = playbooks.get(label)
-        if playbook is None or playbook.max_size == 0:
-            kelly[label] = 0.0
-            continue
-        mask = np.array(
-            [leader[t] == k and evaluate_signal(playbook, rows[t], False, 0).enter for t in range(len(rows))]
-        )
-        kelly[label] = kelly_fraction(next_returns[mask])
-    return kelly
-
-
-def _fit(
-    train: pd.DataFrame, config: BacktestConfig, previous: RegimeModel | None, n_states: int | None
-) -> RegimeModel:
-    z = train[list(Z_FEATURES)].to_numpy()
-    if n_states is None:
-        held_out = config.validation_days * BARS_PER_SESSION
-        n_states = select_states(
-            z[:-held_out], z[-held_out:], config.candidates, config.restarts, config.seed
-        ).n_states
-    model = characterize(fit_hmm(z, n_states, config.restarts, config.seed), z, train["ret"].to_numpy())
-    return model if previous is None else match_labels(previous, model)
-
-
-def _healthy_mask(features: pd.DataFrame) -> npt.NDArray[np.bool_]:
-    mask: npt.NDArray[np.bool_] = np.isfinite(features[[*FEATURES, *Z_FEATURES]].to_numpy()).all(axis=1)
-    return mask
-
-
 def _trim(bars: pd.DataFrame, config: BacktestConfig, include_holdout: bool) -> pd.DataFrame:
     if config.holdout_start is not None and not include_holdout:
         return bars[bars.index < config.holdout_start]
@@ -240,7 +215,7 @@ def run_backtest(
 ) -> BacktestResult:
     bars = _trim(bars, config, include_holdout)
     features = compute_features(bars)
-    healthy = _healthy_mask(features)
+    healthy_rows = healthy(features)
     rows = _rows(features)
     index = pd.DatetimeIndex(bars.index)
     opens, closes = bars["open"].to_numpy(), bars["close"].to_numpy()
@@ -275,19 +250,17 @@ def run_backtest(
             pending = None
 
         if ts >= next_refit:
-            past = (index < ts) & healthy
-            train = features[past]
-            new_model = _fit(train, config, model, model.hmm.n_states if model else None)
-            filtered = forward_filter(new_model.hmm, train[list(Z_FEATURES)].to_numpy())
+            past = (index < ts) & healthy_rows
+            fit = fit_regime(features[past], next_returns[past], playbooks, config.fit, model)
+            new_model = fit.model
             drift = None
             if model is not None:
                 drift = drift_report(model, new_model, np.array(live_ll), insample_ll, config.drift)
                 frozen = drift.drifted
-            kelly = _state_kelly(new_model, train, next_returns[past], playbooks)
-            prior = filtered.next_state[-1]
+            kelly = fit.kelly
             state = start(new_model) if state is None else state
-            state = EngineState(prior=prior, switch=state.switch, position=state.position)
-            model, insample_ll, live_ll = new_model, filtered.log_likelihood, []
+            state = EngineState(prior=fit.prior, switch=state.switch, position=state.position)
+            model, insample_ll, live_ll = new_model, fit.insample_ll, []
             refits.append(
                 RefitRecord(ts, new_model.hmm.n_states, new_model.labels, new_model.hmm.transmat, drift)
             )
@@ -311,7 +284,7 @@ def run_backtest(
             playbooks,
             kelly,
             engine_config,
-            bool(healthy[i]),
+            bool(healthy_rows[i]),
         )
         killed = killed or bool(kill_reasons(config.engine.limits, account))
         if math.isfinite(decision.log_likelihood):
@@ -356,7 +329,7 @@ def run_static(
     with the same fills, costs and hard limits as the system."""
     bars = _trim(bars, config, include_holdout)
     features = compute_features(bars)
-    healthy = _healthy_mask(features)
+    healthy_rows = healthy(features)
     rows = _rows(features)
     index = pd.DatetimeIndex(bars.index)
     opens, closes = bars["open"].to_numpy(), bars["close"].to_numpy()
@@ -378,7 +351,7 @@ def run_static(
             position = replace(position, bars_held=position.bars_held + 1)
         mark = portfolio.mark(closes[i])
         equity.append(mark)
-        if not healthy[i]:
+        if not healthy_rows[i]:
             target = 0
         elif position is not None:
             exit_now = price_exit(position, closes[i]) is not None
@@ -407,3 +380,64 @@ def summarize(equity: pd.Series, trades: tuple[Trade, ...]) -> dict[str, float]:
         "total_return": float(equity.iloc[-1] / equity.iloc[0] - 1),
         "trades": float(len(trades)),
     }
+
+
+@dataclass(frozen=True)
+class Acceptance:
+    result: BacktestResult
+    stats: dict[str, float]
+    baselines: dict[str, float]  # name -> out-of-sample Sharpe
+    gates: GateResult
+
+
+def baseline_sharpes(
+    bars: pd.DataFrame,
+    playbooks: Mapping[str, Playbook],
+    config: BacktestConfig,
+    include_holdout: bool = False,
+) -> dict[str, float]:
+    """Buy-and-hold, and the single static playbook that did best *before*
+    the test period (spec §11), both scored out of sample."""
+    baselines = {"buy-and-hold": sharpe(daily_returns(run_buy_and_hold(bars, config, include_holdout)))}
+    tradable = [p for p in playbooks.values() if p.max_size > 0]
+    if tradable:
+        training = bars[bars.index < config.test_start]
+        on_training = replace(config, test_start=training.index[0])
+
+        def training_sharpe(playbook: Playbook) -> float:
+            score = sharpe(daily_returns(run_static(training, playbook, on_training)[0]))
+            return score if math.isfinite(score) else -math.inf
+
+        best = max(tradable, key=training_sharpe)
+        static, _ = run_static(bars, best, config, include_holdout)
+        baselines[f"static {best.state}"] = sharpe(daily_returns(static))
+    return baselines
+
+
+def acceptance(
+    bars: pd.DataFrame,
+    playbooks: Mapping[str, Playbook],
+    config: BacktestConfig,
+    include_holdout: bool = False,
+    baselines: dict[str, float] | None = None,
+    gates: Gates | None = None,
+) -> Acceptance:
+    """The walk-forward run, scored against the acceptance gates (spec §11)."""
+    result = run_backtest(bars, playbooks, config, include_holdout)
+    stats = summarize(result.equity, result.trades)
+    if baselines is None:
+        baselines = baseline_sharpes(bars, playbooks, config, include_holdout)
+    return Acceptance(result, stats, baselines, evaluate_gates(stats, baselines, gates or Gates()))
+
+
+def acceptance_report(acceptance: Acceptance) -> str:
+    stats, gates = acceptance.stats, acceptance.gates
+    lines = [
+        f"Sharpe {stats['sharpe']:.2f} | max drawdown {stats['max_drawdown']:.1%} | "
+        f"hit rate {stats['hit_rate']:.1%} | t-statistic {stats['t_statistic']:.2f} | "
+        f"total return {stats['total_return']:.1%} | trades {stats['trades']:.0f}",
+        "Baselines (Sharpe): " + ", ".join(f"{name} {v:.2f}" for name, v in acceptance.baselines.items()),
+        "Gates: " + ("PASSED" if gates.passed else "FAILED"),
+    ]
+    lines += [f"  [{'x' if ok else ' '}] {name}" for name, ok in gates.checks.items()]
+    return "\n".join(lines)

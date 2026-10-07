@@ -180,7 +180,7 @@ class Rig:
     next_bar: int = FIT_END
 
     def step(self, n: int = 1) -> list[Decision | None]:
-        """Publish the next bar and run the trader half an hour after it opened."""
+        """Publish the next bar and run the trader as it closes."""
         decisions = []
         for _ in range(n):
             self.broker.cursor = BARS.index[self.next_bar]
@@ -189,7 +189,8 @@ class Rig:
         return decisions
 
     def now(self) -> pd.Timestamp:
-        return self.broker.cursor + pd.Timedelta(minutes=30)
+        """The close of the latest published bar (09:30 closes at 10:00, then on the hour)."""
+        return self.broker.cursor.floor("h") + pd.Timedelta(hours=1)
 
     def restart(self) -> Trader:
         return _trader(self.root, self.broker, self.fit, self.alerts, self.config)
@@ -493,7 +494,7 @@ class FakeReviewClient:
 
 def _journal_with_a_day(root: Path, fit: Fit) -> Journal:
     journal = Journal(root / "journal.db")
-    day = NIGHT_BARS[NIGHT_BARS.index.date == DAY]
+    day = NIGHT_BARS[pd.DatetimeIndex(NIGHT_BARS.index).date == DAY]
     first_label = fit.model.labels[0]
     for i, ts in enumerate(day.index):
         target = 100 if 0 < i < 4 else 0
@@ -682,6 +683,7 @@ def test_cli_backtest_prints_the_gates(tmp_path: Path, capsys: pytest.CaptureFix
         "40",
         "--refit-days",
         "1000",
+        "--no-holdout",  # 200 synthetic days cannot spare a 12-month holdout
     ]
     code = main(args, env={})
     out = capsys.readouterr().out
@@ -689,6 +691,14 @@ def test_cli_backtest_prints_the_gates(tmp_path: Path, capsys: pytest.CaptureFix
     assert "sharpe" in out.lower()
     assert "gates" in out.lower()
     assert list((root / "runs").glob("*/report.md"))
+
+
+def test_cli_backtest_explains_a_missing_holdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _cli_root(tmp_path)
+    assert (
+        main(["--root", str(root), "backtest", "--test-start", str(BARS.index[7 * 150].date())], env={}) == 2
+    )
+    assert "--no-holdout" in capsys.readouterr().err
 
 
 def test_cli_report_writes_the_daily_report(tmp_path: Path) -> None:

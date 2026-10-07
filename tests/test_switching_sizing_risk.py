@@ -193,6 +193,13 @@ def test_large_orders_need_manual_approval() -> None:
     assert result.needs_manual_approval
 
 
+def test_reducing_orders_never_wait_for_approval() -> None:
+    account = _account(position_shares=100)  # $50,000 held
+    result = check_order(LIMITS, account, "CALM_UP", target_shares=0, price=PRICE)
+    assert isinstance(result, Approved)
+    assert not result.needs_manual_approval
+
+
 def test_daily_loss_limit_allows_only_reducing_orders() -> None:
     account = _account(equity=97_900.0, position_shares=100)  # -2.1% today
     assert isinstance(check_order(LIMITS, account, "CALM_UP", target_shares=120, price=PRICE), Vetoed)

@@ -214,3 +214,70 @@ then its implementation, then anything the review found.
 - Review: the exceptions were renamed `BudgetExceededError` and
   `ReviewRefusedError` (N818). The camelCase lint rule is relaxed only for
   the IB protocol and its test fake, which mirror IB's API names.
+
+### Step 9: apps (live, nightly, dashboard, CLI) and the fit bundle
+- Tests first (`tests/test_apps.py`, plus additions to `test_adapters.py`
+  and `test_switching_sizing_risk.py`):
+  - **Live trader**, against a fake broker and an injected clock:
+    - each bar is decided and journaled exactly once;
+    - stale data flattens a position and alerts, and while flat it is only
+      journaled;
+    - an exception flattens and alerts;
+    - the drawdown kill switch flattens, and the trader stays flat after
+      equity recovers;
+    - a manual kill flattens;
+    - orders over $25,000 wait until an approval window is open;
+    - more than 300 s disconnected kills;
+    - unfilled orders are cancelled, and three rejects kill;
+    - fills are journaled and alerted;
+    - a restart resumes from the checkpoint without deciding a bar twice;
+    - failed alerts never stop trading;
+    - an implausible equity read is refused;
+    - live-likelihood drift freezes entries;
+    - the watchdog spots a missed bar, but only during the session.
+  - **Scheduling:** the IBKR bar-close grid and the wake loop.
+  - **Nightly:**
+    - proposed playbooks are parsed with the real grammar, so an injected
+      expression or a mislabelled state is rejected;
+    - valid proposals are backtested against the gates and filed under
+      `proposals/DAY/`;
+    - `playbooks/` is byte-for-byte unchanged afterwards;
+    - an exhausted budget skips the review and alerts;
+    - the daily report has every section in spec §14;
+    - the record handed to Claude is wrapped in `<record>` tags as data.
+  - **Dashboard:** its data comes from the journal and the checkpoint.
+  - **CLI:**
+    - kill and reset;
+    - an approval window;
+    - fit, then a refit with a drift line and the previous fit archived;
+    - a backtest that prints the gates;
+    - a clear error when the holdout leaves no test period;
+    - the daily report;
+    - a live account is refused with exit code 2;
+    - `.env` is parsed without echoing it.
+- Implementation:
+  - `refit.fit_regime` builds the **fit bundle** (model, per-state Kelly,
+    in-sample log-likelihoods, next-bar prior), which the backtest now
+    uses too, so live and research fit identically. `likelihood_alarm` is
+    split out of `drift_report` for the live check.
+  - `backtest.acceptance`, `baseline_sharpes` and `acceptance_report`: one
+    scoring path for the CLI and the nightly loop. The static baseline is
+    chosen on the training period only (spec §11).
+  - `features.healthy`: one definition of a usable row, replacing three
+    copies.
+  - `live.py`: `Trader`, the `Control` folder (sticky `KILL`,
+    `APPROVED_UNTIL`), the JSON checkpoint, `next_bar_close`, `run` and
+    `missed_bar`.
+  - `nightly.py`, `dashboard.py` (Streamlit, read-only), and `cli.py`.
+  - Adapters:
+    - `ibkr.recent`, `fill_report` and `cancel`;
+    - `store.save_fit` and `load_fit`;
+    - an `approval` alert kind;
+    - the reviewer's prompt now asks for proposals in tagged, grammar-only
+      form.
+- Fix (root cause, in `risk.check_order`): reducing orders no longer need
+  manual approval. Before, an exit over $25,000 could have waited for you.
+  The test was added alongside the fix.
+- Test harness correction: IB returns the bar that is still forming, so the
+  trader uses only completed bars and runs at each bar's close. The rig now
+  steps on bar closes rather than 30 minutes into each bar.

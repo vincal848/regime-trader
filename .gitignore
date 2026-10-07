@@ -15,3 +15,10 @@ models/
 journal.db
 runs/
 .env
+proposals/
+reports/
+control/
+live_state.json
+live_state.tmp
+llm_spend.json
+llm_spend.tmp

@@ -23,6 +23,7 @@ from regime_trader.bars import COLUMNS, validate_bars
 from regime_trader.engine import Fill
 from regime_trader.hmm import FloatArray, HmmModel, RegimeModel
 from regime_trader.playbook import Playbook, parse_playbook
+from regime_trader.refit import Fit
 
 
 class BarCache:
@@ -59,8 +60,8 @@ def load_playbooks(directory: Path) -> dict[str, Playbook]:
     return playbooks
 
 
-def save_model(path: Path, model: RegimeModel) -> None:
-    payload = {
+def _model_payload(model: RegimeModel) -> dict[str, object]:
+    return {
         "startprob": model.hmm.startprob.tolist(),
         "transmat": model.hmm.transmat.tolist(),
         "means": model.hmm.means.tolist(),
@@ -69,18 +70,56 @@ def save_model(path: Path, model: RegimeModel) -> None:
         "return_mean": model.return_mean.tolist(),
         "return_vol": model.return_vol.tolist(),
     }
+
+
+def _array(data: dict[str, object], key: str) -> FloatArray:
+    return np.asarray(data[key], dtype=np.float64)
+
+
+def _model_from(data: dict[str, object]) -> RegimeModel:
+    hmm = HmmModel(
+        _array(data, "startprob"), _array(data, "transmat"), _array(data, "means"), _array(data, "covars")
+    )
+    labels = data["labels"]
+    assert isinstance(labels, list)
+    return RegimeModel(
+        hmm, tuple(str(label) for label in labels), _array(data, "return_mean"), _array(data, "return_vol")
+    )
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def save_model(path: Path, model: RegimeModel) -> None:
+    _write_json(path, _model_payload(model))
+
+
 def load_model(path: Path) -> RegimeModel:
+    return _model_from(json.loads(path.read_text(encoding="utf-8")))
+
+
+def save_fit(path: Path, fit: Fit) -> None:
+    payload = _model_payload(fit.model)
+    payload |= {
+        "kelly": fit.kelly,
+        "insample_ll": fit.insample_ll.tolist(),
+        "prior": fit.prior.tolist(),
+        "trained_through": fit.trained_through.isoformat(),
+    }
+    _write_json(path, payload)
+
+
+def load_fit(path: Path) -> Fit:
     data = json.loads(path.read_text(encoding="utf-8"))
-
-    def array(key: str) -> FloatArray:
-        return np.asarray(data[key], dtype=np.float64)
-
-    hmm = HmmModel(array("startprob"), array("transmat"), array("means"), array("covars"))
-    return RegimeModel(hmm, tuple(data["labels"]), array("return_mean"), array("return_vol"))
+    return Fit(
+        model=_model_from(data),
+        kelly={str(k): float(v) for k, v in data["kelly"].items()},
+        insample_ll=_array(data, "insample_ll"),
+        prior=_array(data, "prior"),
+        trained_through=pd.Timestamp(data["trained_through"]),
+    )
 
 
 _SCHEMA = """

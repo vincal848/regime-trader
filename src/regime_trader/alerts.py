@@ -14,7 +14,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Protocol
 
-KINDS = frozenset({"fill", "error", "switch", "drift", "kill", "report"})
+KINDS = frozenset({"fill", "error", "switch", "drift", "kill", "approval", "report"})
 Sender = Callable[[str, dict[str, str]], int]
 
 

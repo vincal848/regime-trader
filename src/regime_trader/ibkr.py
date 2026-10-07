@@ -34,6 +34,16 @@ class PaperOnlyError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class FillReport:
+    """What an order has done so far."""
+
+    filled: int  # signed shares
+    average_price: float  # NaN when nothing filled
+    commission: float
+    done: bool  # nothing left working
+
+
+@dataclass(frozen=True)
 class IbkrSettings:
     host: str
     port: int
@@ -80,6 +90,7 @@ class IbClient(Protocol):
     def accountSummary(self, account: str) -> Any: ...
     def positions(self) -> Any: ...
     def placeOrder(self, contract: Any, order: Any) -> Any: ...
+    def cancelOrder(self, order: Any) -> Any: ...
 
 
 def _stock(symbol: str) -> Any:
@@ -118,33 +129,45 @@ class IbkrBroker:
     def connected(self) -> bool:
         return bool(self._client.isConnected())
 
+    def _bars(self, contract: Any, end: Any, duration: str) -> pd.DataFrame:
+        bars = self._client.reqHistoricalData(contract, end, duration, "1 hour", "TRADES", True, 2)
+        frame = pd.DataFrame(
+            {
+                "open": [b.open for b in bars],
+                "high": [b.high for b in bars],
+                "low": [b.low for b in bars],
+                "close": [b.close for b in bars],
+                "volume": [float(b.volume) for b in bars],
+            },
+            index=pd.DatetimeIndex(pd.to_datetime([b.date for b in bars], utc=True)).tz_convert(TIMEZONE),
+        )
+        return frame
+
+    @staticmethod
+    def _regular_hours(frames: list[pd.DataFrame]) -> pd.DataFrame:
+        bars = pd.concat(frames).sort_index()
+        bars = bars[~bars.index.duplicated(keep="last")]
+        index = pd.DatetimeIndex(bars.index)
+        clock = index - index.normalize()
+        rth: pd.DataFrame = bars[(clock >= SESSION_OPEN) & (clock < SESSION_CLOSE)][list(COLUMNS)]
+        return rth
+
     def history(self, symbol: str, years: int) -> pd.DataFrame:
         """Hourly RTH TRADES bars for the last `years` years, one year per request."""
         contract = self._contract(symbol)
         frames = []
         end: Any = ""
         for _ in range(years):
-            bars = self._client.reqHistoricalData(contract, end, "1 Y", "1 hour", "TRADES", True, 2)
-            if not bars:
+            frame = self._bars(contract, end, "1 Y")
+            if frame.empty:
                 break
-            frame = pd.DataFrame(
-                {
-                    "open": [b.open for b in bars],
-                    "high": [b.high for b in bars],
-                    "low": [b.low for b in bars],
-                    "close": [b.close for b in bars],
-                    "volume": [float(b.volume) for b in bars],
-                },
-                index=pd.DatetimeIndex(pd.to_datetime([b.date for b in bars], utc=True)).tz_convert(TIMEZONE),
-            )
             frames.append(frame)
-            end = bars[0].date
-        history = pd.concat(frames).sort_index()
-        history = history[~history.index.duplicated(keep="last")]
-        index = pd.DatetimeIndex(history.index)
-        clock = index - index.normalize()
-        rth: pd.DataFrame = history[(clock >= SESSION_OPEN) & (clock < SESSION_CLOSE)][list(COLUMNS)]
-        return rth
+            end = frame.index[0].tz_convert("UTC").to_pydatetime()
+        return self._regular_hours(frames)
+
+    def recent(self, symbol: str, days: int) -> pd.DataFrame:
+        """The last `days` sessions of hourly bars: the live loop's feed."""
+        return self._regular_hours([self._bars(self._contract(symbol), "", f"{days} D")])
 
     def equity(self) -> float:
         for item in self._client.accountSummary(self.settings.account):
@@ -172,3 +195,15 @@ class IbkrBroker:
         price = round(reference_price * (1 + offset if buying else 1 - offset), 2)
         order = self._limit_order("BUY" if buying else "SELL", abs(delta), price)
         return self._client.placeOrder(self._contract(symbol), order)
+
+    def fill_report(self, trade: Any) -> FillReport:
+        """Shares filled so far (signed), their average price and commission."""
+        sign = 1 if trade.order.action == "BUY" else -1
+        shares = sum(f.execution.shares for f in trade.fills)
+        notional = sum(f.execution.shares * f.execution.price for f in trade.fills)
+        commission = sum(f.commissionReport.commission for f in trade.fills)
+        average = notional / shares if shares else float("nan")
+        return FillReport(sign * int(shares), average, float(commission), bool(trade.isDone()))
+
+    def cancel(self, trade: Any) -> None:
+        self._client.cancelOrder(trade.order)
