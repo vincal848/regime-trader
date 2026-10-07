@@ -31,7 +31,7 @@ from regime_trader.backtest import BacktestConfig
 from regime_trader.cli import main, read_env
 from regime_trader.dashboard import dashboard_data
 from regime_trader.engine import Decision, EngineConfig, Fill
-from regime_trader.features import FEATURES, Z_FEATURES, compute_features
+from regime_trader.features import compute_features
 from regime_trader.ibkr import FillReport
 from regime_trader.live import Control, LiveConfig, Trader, missed_bar, next_bar_close, run
 from regime_trader.llm import SYSTEM_PROMPT, NightlyReviewer, RawReview, SpendLedger, Usage
@@ -46,6 +46,7 @@ from regime_trader.refit import (
     fit_regime,
     likelihood_floor,
     rolling_alarm,
+    training_set,
 )
 from regime_trader.risk import RiskLimits
 from regime_trader.store import BarCache, Journal, load_fit, load_playbooks
@@ -78,10 +79,8 @@ EAGER = {s: _playbook(s, "always", "never", 1.0) for s in ("CALM_UP", "CHOP", "S
 
 
 def _fit(end: int, previous: Fit | None = None) -> Fit:
-    features = compute_features(BARS.iloc[:end])
-    healthy = np.isfinite(features[[*FEATURES, *Z_FEATURES]].to_numpy()).all(axis=1)
-    next_returns = features["ret"].shift(-1).to_numpy()
-    return fit_regime(features[healthy], next_returns[healthy], EAGER, FIT_CONFIG, previous)
+    features, next_returns = training_set(compute_features(BARS.iloc[:end]))
+    return fit_regime(features, next_returns, EAGER, FIT_CONFIG, previous)
 
 
 @pytest.fixture(scope="module")
@@ -506,7 +505,9 @@ def test_the_watchdog_flags_a_missed_bar_only_in_session(tmp_path: Path, fit: Fi
 NIGHT_BARS = BARS.iloc[: 7 * 200]
 DAY = NIGHT_BARS.index[-1].date()
 NIGHT_CONFIG = BacktestConfig(
-    test_start=NIGHT_BARS.index[7 * 150], candidates=(2,), restarts=1, validation_days=40, refit_days=1000
+    test_start=NIGHT_BARS.index[7 * 150],
+    fit=FitConfig(candidates=(2,), restarts=1, validation_days=40),
+    refit_days=1000,
 )
 NOW = datetime(2026, 10, 7, 22, 0, tzinfo=UTC)
 

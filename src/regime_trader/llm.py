@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from regime_trader.store import write_json
+
 MODEL = "claude-opus-5-5"
 CHARS_PER_TOKEN_FLOOR = 3  # conservative: real text averages more characters per token
 
@@ -151,10 +153,7 @@ class SpendLedger:
     def add(self, month: str, amount: float) -> None:
         data = self._load()
         data[month] = data.get(month, 0.0) + amount
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        write_json(self.path, data)
 
 
 SYSTEM_PROMPT = """You are the research layer of an hourly SPY regime-trading system that trades an

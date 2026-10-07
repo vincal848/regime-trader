@@ -58,7 +58,7 @@ from regime_trader.ibkr import FillReport
 from regime_trader.playbook import Playbook
 from regime_trader.refit import DriftConfig, Fit, adopt_fit, rolling_alarm
 from regime_trader.risk import AccountState, Approved, Vetoed, kill_reasons
-from regime_trader.store import BarCache, Journal
+from regime_trader.store import BarCache, Journal, write_json
 from regime_trader.switching import SwitchState
 
 BAR_CLOSE_HOURS = range(10, 17)  # IBKR RTH grid: 09:30-10:00, then hourly to 16:00
@@ -241,10 +241,7 @@ def save_checkpoint(path: Path, checkpoint: Checkpoint) -> None:
         "live_ll": list(checkpoint.live_ll),
         "entries_frozen": checkpoint.entries_frozen,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    write_json(path, payload)
 
 
 def load_checkpoint(path: Path) -> Checkpoint | None:

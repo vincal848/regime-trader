@@ -45,7 +45,7 @@ from scipy.optimize import linear_sum_assignment
 from regime_trader.bars import BARS_PER_SESSION
 from regime_trader.calibration import state_calibration
 from regime_trader.engine import EngineState, playbook_for
-from regime_trader.features import Z_FEATURES, feature_rows
+from regime_trader.features import Z_FEATURES, feature_rows, healthy
 from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
 from regime_trader.playbook import Playbook, evaluate_signal
 from regime_trader.sizing import kelly_fraction
@@ -181,6 +181,13 @@ def state_kelly(
         returns = next_returns[entering]
         kelly[label] = kelly_fraction(returns[np.isfinite(returns)])
     return kelly
+
+
+def training_set(features: pd.DataFrame) -> tuple[pd.DataFrame, FloatArray]:
+    """What a fit trains on: the healthy rows, and each row's next-bar return."""
+    rows = healthy(features)
+    next_returns: FloatArray = features["ret"].shift(-1).to_numpy()
+    return features[rows], next_returns[rows]
 
 
 def fit_regime(

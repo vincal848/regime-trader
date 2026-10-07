@@ -27,19 +27,17 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-import numpy as np
-import numpy.typing as npt
 import pandas as pd
 
 from regime_trader.alerts import Alerts, NullAlerts, TelegramAlerts
 from regime_trader.backtest import BacktestConfig, acceptance, acceptance_report
 from regime_trader.bars import TIMEZONE
-from regime_trader.features import compute_features, healthy
+from regime_trader.features import compute_features
 from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.live import Control, LiveConfig, Trader, missed_bar, run
 from regime_trader.llm import AnthropicReviewClient, NightlyReviewer, SpendLedger
 from regime_trader.nightly import daily_report, run_nightly
-from regime_trader.refit import FitConfig, fit_regime
+from regime_trader.refit import FitConfig, fit_regime, training_set
 from regime_trader.store import BarCache, Journal, load_fit, load_playbooks, save_fit
 
 SYMBOL = "SPY"
@@ -119,15 +117,10 @@ def _now() -> pd.Timestamp:
     return pd.Timestamp.now(tz=TIMEZONE)
 
 
-def _training_set(bars: pd.DataFrame) -> tuple[pd.DataFrame, npt.NDArray[np.float64]]:
-    features = compute_features(bars)
-    rows = healthy(features)
-    next_returns = features["ret"].shift(-1).to_numpy()
-    return features[rows], next_returns[rows]
-
-
 def _fit_config(args: argparse.Namespace) -> FitConfig:
-    return FitConfig(tuple(args.candidates), args.restarts, FitConfig.seed, args.validation_days)
+    return FitConfig(
+        candidates=tuple(args.candidates), restarts=args.restarts, validation_days=args.validation_days
+    )
 
 
 # --- commands ---------------------------------------------------------------------------------
@@ -151,7 +144,7 @@ def _fetch(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) -> in
 
 def _fit(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) -> int:
     bars = BarCache(paths.data).load(SYMBOL)
-    features, next_returns = _training_set(bars)
+    features, next_returns = training_set(compute_features(bars))
     previous = load_fit(paths.fit) if paths.fit.exists() else None
     playbooks = load_playbooks(paths.playbooks)
     fit = fit_regime(features, next_returns, playbooks, _fit_config(args), previous)
@@ -194,9 +187,7 @@ def _backtest_config(args: argparse.Namespace, bars: pd.DataFrame) -> BacktestCo
     return BacktestConfig(
         test_start=test_start,
         refit_days=args.refit_days,
-        candidates=tuple(args.candidates),
-        restarts=args.restarts,
-        validation_days=args.validation_days,
+        fit=_fit_config(args),
         holdout_start=None if args.no_holdout else holdout,
     )
 

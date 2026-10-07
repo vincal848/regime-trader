@@ -41,7 +41,7 @@ from regime_trader.hmm import forward_filter
 from regime_trader.llm import BudgetExceededError, NightlyReviewer, ReviewRefusedError
 from regime_trader.playbook import Playbook, PlaybookError, parse_playbook
 from regime_trader.refit import Fit
-from regime_trader.store import Journal
+from regime_trader.store import Journal, write_json
 
 CALIBRATION_SESSIONS = 60
 PLAYBOOK_TAG = re.compile(r'<playbook state="([A-Za-z0-9_]+)">(.*?)</playbook>', re.DOTALL)
@@ -236,8 +236,7 @@ def evaluate_proposals(
 def _count_trials(proposals_dir: Path, new: int) -> int:
     path = proposals_dir / "trials.json"
     total = (json.loads(path.read_text(encoding="utf-8"))["count"] if path.exists() else 0) + new
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"count": total}), encoding="utf-8")
+    write_json(path, {"count": total})
     return total
 
 

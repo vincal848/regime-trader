@@ -93,19 +93,12 @@ def commission(shares: int, costs: Costs) -> float:
 class BacktestConfig:
     test_start: pd.Timestamp
     refit_days: int = 30
-    candidates: tuple[int, ...] = (2, 3, 4, 5)
-    restarts: int = 10
-    seed: int = 20260107
-    validation_days: int = 126  # sessions held out of the first fit to choose K
+    fit: FitConfig = field(default_factory=FitConfig)
     costs: Costs = field(default_factory=Costs)
     initial_equity: float = 100_000.0
     engine: EngineConfig = field(default_factory=EngineConfig)
     drift: DriftConfig = field(default_factory=DriftConfig)
     holdout_start: pd.Timestamp | None = None  # None: no locked holdout
-
-    @property
-    def fit(self) -> FitConfig:
-        return FitConfig(self.candidates, self.restarts, self.seed, self.validation_days)
 
 
 @dataclass(frozen=True)
@@ -233,7 +226,7 @@ def run_backtest(
     refits: list[RefitRecord] = []
     live_ll: list[float] = []
     fills: list[Fill] = []
-    pending: tuple[Decision, int] | None = None
+    pending: Decision | None = None
     equity: list[float] = []
     positions: list[int] = []
     active: list[str] = []
@@ -243,8 +236,9 @@ def run_backtest(
     first = int(index.searchsorted(config.test_start))
     for i in range(first, len(index)):
         ts = index[i]
-        if pending is not None and state is not None:
-            decision, target = pending
+        if pending is not None:
+            assert state is not None  # an order is only pending after a refit set the state
+            decision, target = pending, pending.target_shares
             fill = portfolio.execute(target, opens[i], decision.ts, ts, decision.regime.active or "NONE")
             fills.append(fill)
             state = on_fill(state, decision, playbooks, portfolio.shares, fill.price)
@@ -288,7 +282,7 @@ def run_backtest(
             frozen = frozen or rolling_alarm(live_ll, current.ll_floor, config.drift.ll_window)
         if decision.target_shares != portfolio.shares and isinstance(decision.order, Approved):
             manual += int(decision.order.needs_manual_approval)
-            pending = (decision, decision.target_shares)
+            pending = decision
         equity.append(mark)
         positions.append(portfolio.shares)
         active.append(decision.regime.active or "NONE")
@@ -417,14 +411,13 @@ def acceptance(
     config: BacktestConfig,
     include_holdout: bool = False,
     baselines: dict[str, float] | None = None,
-    gates: Gates | None = None,
 ) -> Acceptance:
     """The walk-forward run, scored against the acceptance gates (spec §11)."""
     result = run_backtest(bars, playbooks, config, include_holdout)
     stats = summarize(result.equity, result.trades)
     if baselines is None:
         baselines = baseline_sharpes(bars, playbooks, config, include_holdout)
-    return Acceptance(result, stats, baselines, evaluate_gates(stats, baselines, gates or Gates()))
+    return Acceptance(result, stats, baselines, evaluate_gates(stats, baselines, Gates()))
 
 
 def acceptance_report(acceptance: Acceptance) -> str:

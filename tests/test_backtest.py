@@ -20,7 +20,7 @@ from regime_trader.backtest import (
     summarize,
 )
 from regime_trader.playbook import Playbook, parse_playbook
-from regime_trader.refit import DriftConfig
+from regime_trader.refit import DriftConfig, FitConfig
 
 N_DAYS = 330
 BARS = make_regime_bars(N_DAYS, seed=3)
@@ -49,7 +49,9 @@ PLAYBOOKS = {
     "STRESS": _playbook("STRESS", "never", "always", 0.25),
     "CRASH": _playbook("CRASH", "never", "always", 0.0),
 }
-CONFIG = BacktestConfig(test_start=TEST_START, candidates=(2, 3), restarts=2, validation_days=60)
+CONFIG = BacktestConfig(
+    test_start=TEST_START, fit=FitConfig(candidates=(2, 3), restarts=2, validation_days=60)
+)
 
 
 @pytest.fixture(scope="module")

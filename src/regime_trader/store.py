@@ -90,13 +90,16 @@ def _model_from(data: dict[str, object]) -> RegimeModel:
     )
 
 
-def _write_json(path: Path, payload: dict[str, object]) -> None:
+def write_json(path: Path, payload: object) -> None:
+    """Write JSON atomically: a crash leaves the old file or the new one, never half of either."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def save_model(path: Path, model: RegimeModel) -> None:
-    _write_json(path, _model_payload(model))
+    write_json(path, _model_payload(model))
 
 
 def load_model(path: Path) -> RegimeModel:
@@ -114,7 +117,7 @@ def save_fit(path: Path, fit: Fit) -> None:
         "drift": asdict(fit.drift) if fit.drift else None,
         "ll_floor": fit.ll_floor,
     }
-    _write_json(path, payload)
+    write_json(path, payload)
 
 
 def _drift_from(data: dict[str, Any] | None) -> DriftReport | None:
