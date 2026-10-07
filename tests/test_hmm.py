@@ -94,8 +94,11 @@ def test_fit_recovers_a_planted_three_state_process() -> None:
 
 def test_seeded_fits_are_reproducible() -> None:
     x, _ = _sample(PLANTED, 800, seed=6)
+    # Same seed, same model -- to 1e-10, not bit-for-bit: multithreaded BLAS
+    # reductions do not fix their summation order (observed spread ~1e-13).
     first, second = fit_hmm(x, 3, restarts=3, seed=11), fit_hmm(x, 3, restarts=3, seed=11)
-    np.testing.assert_array_equal(first.transmat, second.transmat)
+    np.testing.assert_allclose(first.transmat, second.transmat, atol=1e-10)
+    np.testing.assert_allclose(first.means, second.means, atol=1e-10)
 
 
 def test_bic_counts_parameters() -> None:
@@ -126,8 +129,16 @@ def test_selection_finds_three_well_separated_states() -> None:
 @pytest.mark.parametrize(
     ("means", "vols", "expected"),
     [
-        ([0.001, -0.002, 0.0], [0.002, 0.009, 0.004], ("CALM_UP", "CRASH", "STRESS")),
-        ([0.001, -0.0001], [0.002, 0.003], ("CALM_UP", "CHOP")),
+        (
+            [0.001, -0.002, 0.0],
+            [0.002, 0.009, 0.004],
+            ("CALM_UP", "CRASH", "CHOP"),
+        ),  # middle vol is not above the median
+        (
+            [0.001, -0.0001],
+            [0.002, 0.003],
+            ("CALM_UP", "CRASH"),
+        ),  # risk-first: higher-vol losing state is CRASH
         ([0.001, 0.0, -0.001, -0.004], [0.002, 0.003, 0.006, 0.012], ("CALM_UP", "CHOP", "STRESS", "CRASH")),
         ([0.001, 0.0005, -0.001], [0.002, 0.0021, 0.008], ("CALM_UP_1", "CALM_UP_2", "CRASH")),
         ([0.001, 0.002], [0.002, 0.009], ("CALM_UP", "STRESS")),  # highest vol but positive mean: not CRASH

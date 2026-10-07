@@ -42,6 +42,10 @@ packages = ["src/regime_trader"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "-ra"]
+filterwarnings = [
+    # hmmlearn 0.3.x sets ndarray.shape, deprecated in NumPy 2.5; harmless
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning:hmmlearn",
+]
 
 [tool.ruff]
 line-length = 110

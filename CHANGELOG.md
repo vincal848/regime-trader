@@ -30,3 +30,30 @@ then its implementation, then anything the review found.
 - Test correction: the warm-up expectation was 30 sessions, but the volume
   ratio (20 sessions) followed by its own z-score history (140 bars) needs
   about 41.
+
+### Step 3: Gaussian HMM
+- Tests first (`tests/test_hmm.py`):
+  - the forward filter equals brute-force path enumeration;
+  - rows are distributions, next-state probabilities = filtered · A, and
+    filtering a prefix gives the same rows;
+  - the log-likelihood equals hmmlearn's forward score;
+  - a planted 3-state process is recovered (means within 0.15, more than
+    90% state accuracy);
+  - BIC parameter count;
+  - the one-standard-error rule picks K = 2 on two-state data and K = 3 on
+    three-state data;
+  - labelling rules, expected duration, filtered-weight characterization.
+- Implementation, `hmm.py`:
+  - frozen `HmmModel` / `RegimeModel`; a log-space `forward_filter`;
+  - `fit_hmm` (seeded, best of N restarts, degenerate runs skipped);
+  - `select_states` with BIC reported;
+  - `label_states`; `characterize` (state statistics weighted by
+    *filtered* probabilities, so no smoothing is needed anywhere outside
+    calibration); `expected_duration`.
+- Test corrections:
+  - Two labelling cases expected intuition rather than the spec's rule. In
+    a 3-state model the middle-volatility state is not above the median, so
+    it is CHOP. In a 2-state model the higher-volatility losing state is
+    CRASH, the risk-first reading. The rule is kept and the tests follow it.
+  - Seeded fits agree to about 1e-13, not bit-for-bit, because of
+    multithreaded BLAS. The test asserts 1e-10.
