@@ -137,3 +137,36 @@ then its implementation, then anything the review found.
     log-likelihood against an in-sample rolling percentile;
   - `calibration.py`: the only module allowed to use smoothed posteriors.
 - All 14 passed on first implementation.
+
+### Step 7b: walk-forward backtest
+- Tests first:
+  - `tests/test_backtest.py`, 12 tests on a synthetic two-regime market:
+    - fill price and commission math;
+    - trading only out of sample;
+    - **every fill at the open of the bar after its decision**;
+    - long/flat with notional ≤ equity;
+    - cash accounting reconciles;
+    - refits are spaced at least 30 days apart with stable labels;
+    - costs reduce the result;
+    - the holdout is locked unless explicitly requested;
+    - **refits and equity marks before a cut are unchanged when every
+      later bar is perturbed**;
+    - per-state attribution covers every bar;
+    - baselines and the summary.
+  - `tests/test_engine.py`: frozen entries block new positions but allow
+    exits.
+- Implementation:
+  - `backtest.py`: `run_backtest` (K selected once, then monthly
+    expanding refits; label matching; drift freezes entries; Kelly from
+    training data only), `run_buy_and_hold`, `run_static`, `summarize`, and
+    a shared `_Portfolio` for fills, costs and round trips.
+  - `engine.py`: `entries_frozen`; `open_position` and `price_exit` were
+    extracted so the static baseline reuses the engine's stop logic instead
+    of copying it.
+- Found while implementing: decisions sized at the close but filled at the
+  next open could cost more than the cash available, briefly leveraging
+  the account. Execution now caps every buy at what the cash can pay for,
+  fees included.
+- Test correction: the causality test compares refit parameters to 1e-9,
+  not bit-for-bit. Identical runs differ by about 1e-12 because of
+  multithreaded BLAS in hmmlearn; a leak would differ by far more.

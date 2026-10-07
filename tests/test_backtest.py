@@ -1,6 +1,7 @@
 """Step 7b: the walk-forward backtest (spec §11, §12)."""
 
 from dataclasses import replace
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -100,7 +101,7 @@ def test_cash_accounting_reconciles(result: BacktestResult) -> None:
 def test_refits_are_monthly_with_stable_labels(result: BacktestResult) -> None:
     times = [refit.ts for refit in result.refits]
     assert len(times) >= 3
-    assert all((b - a) >= pd.Timedelta(days=30) for a, b in zip(times, times[1:], strict=False))
+    assert all((b - a) >= pd.Timedelta(days=30) for a, b in pairwise(times))
     assert len({tuple(sorted(refit.labels)) for refit in result.refits}) == 1
 
 
@@ -126,10 +127,12 @@ def test_no_refit_or_mark_depends_on_bars_after_it(result: BacktestResult) -> No
     rng = np.random.default_rng(9)
     values[later, :4] *= np.exp(rng.normal(0.0, 0.05, int(later.sum())))[:, None]
     perturbed = run_backtest(pd.DataFrame(values, index=BARS.index, columns=BARS.columns), PLAYBOOKS, CONFIG)
+    # Equal to 1e-9, not bit-for-bit: hmmlearn's EM runs on multithreaded BLAS
+    # (spread ~1e-12 between identical runs). A leak would differ by far more.
     for before, after in zip(result.refits[:3], perturbed.refits[:3], strict=True):
-        np.testing.assert_array_equal(before.transmat, after.transmat)
+        np.testing.assert_allclose(before.transmat, after.transmat, atol=1e-9)
     earlier = result.equity.index < cut
-    pd.testing.assert_series_equal(result.equity[earlier], perturbed.equity[earlier])
+    pd.testing.assert_series_equal(result.equity[earlier], perturbed.equity[earlier], rtol=1e-9)
 
 
 def test_per_state_attribution_covers_every_bar(result: BacktestResult) -> None:

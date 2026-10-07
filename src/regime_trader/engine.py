@@ -70,6 +70,7 @@ class EngineConfig:
     switch: SwitchConfig = field(default_factory=SwitchConfig)
     limits: RiskLimits = field(default_factory=RiskLimits)
     calibrated: bool = True  # False: fixed sizing of a quarter of the state cap (spec §9)
+    entries_frozen: bool = False  # set by a drift alarm: exits only (spec §12)
 
 
 @dataclass(frozen=True)
@@ -168,10 +169,9 @@ def decide(
             price,
             config,
         )
-        if position is not None and price <= position.stop_price:
-            reasons.append(f"stop {position.stop_price:.2f} hit at {price:.2f}")
-        elif position is not None and price >= position.take_profit_price:
-            reasons.append(f"take profit {position.take_profit_price:.2f} hit at {price:.2f}")
+        exit_reason = price_exit(position, price) if position is not None else None
+        if exit_reason is not None:
+            reasons.append(exit_reason)
         else:
             signal = evaluate_signal(
                 playbook, row, position is not None, position.bars_held if position else 0
@@ -179,6 +179,8 @@ def decide(
             reasons.append(signal.reason)
             if position is not None and not signal.exit:
                 target = min(current, sized)  # while holding, size may only shrink
+            elif position is None and signal.enter and config.entries_frozen:
+                reasons.append("entries frozen by a drift alarm: no new position")
             elif position is None and signal.enter:
                 target = sized
 
@@ -216,14 +218,26 @@ def on_fill(
     active = decision.regime.active
     if active is None or active not in playbooks:
         raise ValueError(f"fill opened a position without an active playbook ({active})")
-    playbook = playbooks[active]
-    rv = decision.entry_rv
-    position = OpenPosition(
-        playbook=active,
+    return replace(state, position=open_position(playbooks[active], shares, fill_price, decision.entry_rv))
+
+
+def open_position(playbook: Playbook, shares: int, fill_price: float, rv: float) -> OpenPosition:
+    """A new position with its stop and take-profit set from the fill price
+    and the entry bar's realized volatility."""
+    return OpenPosition(
+        playbook=playbook.state,
         shares=shares,
         entry_price=fill_price,
         stop_price=fill_price * math.exp(-playbook.stop_loss_vol * rv),
         take_profit_price=fill_price * math.exp(playbook.take_profit_vol * rv),
         bars_held=0,
     )
-    return replace(state, position=position)
+
+
+def price_exit(position: OpenPosition, price: float) -> str | None:
+    """The reason a close at `price` exits `position`, if it does."""
+    if price <= position.stop_price:
+        return f"stop {position.stop_price:.2f} hit at {price:.2f}"
+    if price >= position.take_profit_price:
+        return f"take profit {position.take_profit_price:.2f} hit at {price:.2f}"
+    return None
