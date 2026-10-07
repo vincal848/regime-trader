@@ -57,3 +57,24 @@ then its implementation, then anything the review found.
     CRASH, the risk-first reading. The rule is kept and the tests follow it.
   - Seeded fits agree to about 1e-13, not bit-for-bit, because of
     multithreaded BLAS. The test asserts 1e-10.
+
+### Step 4: switching, sizing, risk
+- Tests first (`tests/test_switching_sizing_risk.py`, 24 tests):
+  - each switching rule 1–6 on its own, plus no regime before the first
+    takeover, interrupted leads, and the cooldown deferring a qualified
+    challenger;
+  - entropy, Kelly, the size formula, caps and zero cases;
+  - state caps by label prefix, with unknown labels capped at zero;
+  - long/flat only, the state-cap veto, the manual approval threshold, and
+    the daily loss limit allowing only reducing orders;
+  - every kill-switch trigger (drawdown, rejects, disconnect, manual) vetoes
+    new risk but approves flattening.
+- Implementation:
+  - `switching.py`: frozen `SwitchState`, `step_switch` returning a
+    `Regime` with the reasons for every rule that fired;
+  - `sizing.py`: ¼ Kelly × P(active) × (1 − H / ln K) × multiplier, capped;
+  - `risk.py`: `RiskLimits`, `AccountState`, `check_order` →
+    `Approved | Vetoed`, and `kill_reasons`. It imports nothing from the
+    package; flattening never waits for approval.
+- All 24 passed on first implementation. The only fix was typing the
+  test helpers without `type: ignore`.

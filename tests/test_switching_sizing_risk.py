@@ -49,7 +49,7 @@ def test_no_regime_until_a_state_takes_over() -> None:
 
 
 def test_rule_1_and_2_takeover_needs_probability_above_070_for_three_bars() -> None:
-    state, regimes = _run([CALM, CALM, CALM])
+    _, regimes = _run([CALM, CALM, CALM])
     assert regimes[1].active is None
     assert regimes[2].active == "CALM_UP"
     assert regimes[2].switched
@@ -159,8 +159,8 @@ FLAT = AccountState(
 )
 
 
-def _account(**changes: float) -> AccountState:
-    return replace(FLAT, **changes)
+def _account(equity: float = 100_000.0, position_shares: int = 0) -> AccountState:
+    return replace(FLAT, equity=equity, position_shares=position_shares)
 
 
 def test_state_caps_match_by_label_prefix_and_unknown_labels_get_zero() -> None:
@@ -200,16 +200,15 @@ def test_daily_loss_limit_allows_only_reducing_orders() -> None:
 
 
 @pytest.mark.parametrize(
-    ("changes", "reason"),
+    ("account", "reason"),
     [
-        ({"equity": 89_000.0}, "drawdown"),
-        ({"consecutive_rejects": 3}, "rejects"),
-        ({"disconnected_seconds": 301.0}, "disconnected"),
-        ({"killed": True}, "kill switch"),
+        (replace(FLAT, equity=89_000.0, position_shares=50), "drawdown"),
+        (replace(FLAT, consecutive_rejects=3, position_shares=50), "rejects"),
+        (replace(FLAT, disconnected_seconds=301.0, position_shares=50), "disconnected"),
+        (replace(FLAT, killed=True, position_shares=50), "kill switch"),
     ],
 )
-def test_kill_switch_triggers(changes: dict[str, float], reason: str) -> None:
-    account = _account(**changes, position_shares=50)
+def test_kill_switch_triggers(account: AccountState, reason: str) -> None:
     reasons = kill_reasons(LIMITS, account)
     assert any(reason in r for r in reasons)
     assert isinstance(check_order(LIMITS, account, "CALM_UP", target_shares=60, price=PRICE), Vetoed)
