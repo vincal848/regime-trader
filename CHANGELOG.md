@@ -119,3 +119,21 @@ then its implementation, then anything the review found.
 - Design note: stops are evaluated at bar closes and exit at the next
   open, in backtest and live alike. A gap can go through a stop. That is
   recorded for the go-live risk list.
+
+### Step 7a: metrics, gates, refits, calibration
+- Tests first (`tests/test_metrics_refit_calibration.py`, 14 tests):
+  - Sharpe, t-statistic, drawdown and hit rate on known series; daily
+    returns from each session's last mark;
+  - gates fail on any single check, including losing to a baseline;
+  - label matching restores names after a permuted refit;
+  - drift fires on a transition shift, a mean shift and a live-likelihood
+    drop, and stays quiet on an identical refit;
+  - Brier and reliability; a true model beats climatology; an
+    overconfident model on regime-free data is flagged as uncalibrated.
+- Implementation:
+  - `metrics.py`: daily-scale statistics, `Gates`, `evaluate_gates`;
+  - `refit.py`: Hungarian `match_labels` on z-space means; `drift_report`
+    measuring shifts in old-state standard deviations, with live
+    log-likelihood against an in-sample rolling percentile;
+  - `calibration.py`: the only module allowed to use smoothed posteriors.
+- All 14 passed on first implementation.
