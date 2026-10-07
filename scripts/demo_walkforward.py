@@ -81,7 +81,7 @@ def _figures(result: Acceptance, hold: pd.Series, bars: pd.DataFrame) -> None:
         run.positions[window].index, run.positions[window], step="post", color="#1f5fa8", alpha=0.35
     )
     shares_axis.set_ylabel("Shares held")
-    price_axis.set_title("April 2025 sell-off: the CRASH state (red) covers the drop, and the trader stays flat through it")
+    price_axis.set_title("April 2025 sell-off: CRASH (red) covers the drop; the trader stays flat")
     figure.tight_layout()
     figure.savefig(DOCS / "img" / "april_2025.png", dpi=130)
     plt.close(figure)

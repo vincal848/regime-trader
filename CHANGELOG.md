@@ -431,3 +431,14 @@ tests first; the refactors were checked against the existing suite.
 - First GitHub push: mypy failed on CI because the newer numpy stubs there
   type `np.linalg.cholesky` as `floating[Any]`. The cached Cholesky factors
   and log normalizers are now explicitly float64.
+
+### README in the portfolio style
+- The README was rewritten to follow options_pricing:
+  - the origin story, and what building it properly showed;
+  - an equity figure and an "At a glance" table;
+  - Results, How it works (mermaid), Decisions (each tied to the test that
+    pins it), and Future interests.
+- `scripts/demo_walkforward.py` now regenerates `docs/DEMO_RESULTS.md` and
+  `docs/img/` (the equity curve, and the April 2025 sell-off), so the
+  README's numbers cannot drift from the code. matplotlib was added to the
+  `demo` extra.
