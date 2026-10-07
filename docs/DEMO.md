@@ -14,6 +14,9 @@ regime-trader --root demo fetch --source yahoo
 python scripts/demo_walkforward.py demo 2025-01-02
 ```
 
+The script rewrites [DEMO_RESULTS.md](DEMO_RESULTS.md) (every table below,
+plus the per-refit detail) and the figures in `docs/img/`.
+
 - Data: 5,066 hourly RTH bars of SPY, 2023-11-08 to 2026-10-07.
 - Walk-forward: from 2025-01-02, refitting every 30 days on an expanding
   window.
