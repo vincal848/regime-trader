@@ -16,12 +16,13 @@ so a single code path produces every number the system acts on.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 import numpy.typing as npt
-from scipy.special import logsumexp
-from scipy.stats import multivariate_normal
+from scipy.linalg import solve_triangular
 
 FloatArray = npt.NDArray[np.float64]
 
@@ -43,6 +44,15 @@ class HmmModel:
     def n_features(self) -> int:
         return int(self.means.shape[1])
 
+    @cached_property
+    def _cholesky(self) -> tuple[FloatArray, FloatArray]:
+        """Each state's Cholesky factor and Gaussian log normalizer, factorised
+        once per model instead of once per bar."""
+        factors = np.linalg.cholesky(self.covars)  # (K, D, D); hmmlearn keeps covariances positive definite
+        log_det = 2.0 * np.log(np.diagonal(factors, axis1=1, axis2=2)).sum(axis=1)
+        log_norm = -0.5 * (self.n_features * math.log(2.0 * math.pi) + log_det)
+        return factors, log_norm
+
 
 @dataclass(frozen=True)
 class RegimeModel:
@@ -62,12 +72,13 @@ class FilterResult:
 
 
 def _emission_log_density(model: HmmModel, x: FloatArray) -> FloatArray:
-    return np.column_stack(
-        [
-            multivariate_normal(model.means[k], model.covars[k], allow_singular=True).logpdf(x)
-            for k in range(model.n_states)
-        ]
-    ).reshape(len(x), model.n_states)
+    """log N(x_t; mean_k, covar_k) for every row t and state k: (T, K)."""
+    factors, log_norm = model._cholesky
+    density = np.empty((len(x), model.n_states))
+    for k in range(model.n_states):
+        whitened = solve_triangular(factors[k], (x - model.means[k]).T, lower=True)
+        density[:, k] = log_norm[k] - 0.5 * (whitened**2).sum(axis=0)
+    return density
 
 
 @dataclass(frozen=True)
@@ -87,7 +98,8 @@ def _update(model: HmmModel, prior: FloatArray, log_density: FloatArray) -> Filt
     """One forward step in log space: Bayes on the emission, then one transition."""
     with np.errstate(divide="ignore"):  # a zero probability is a legitimate -inf in log space
         joint = np.log(prior) + log_density
-    step_ll = float(logsumexp(joint))
+    peak = float(joint.max())  # log-sum-exp, inline: scipy's costs 20x more on a K-vector
+    step_ll = peak + math.log(float(np.exp(joint - peak).sum())) if math.isfinite(peak) else peak
     filtered = np.exp(joint - step_ll)
     return FilterStep(filtered, filtered @ model.transmat, step_ll)
 
@@ -196,11 +208,12 @@ def select_states(
     for k in candidates:
         model = fit_hmm(train, k, restarts, seed)
         fits[k] = model
-        step_ll = forward_filter(model, np.vstack([train, valid])).log_likelihood[len(train) :]
+        all_ll = forward_filter(model, np.vstack([train, valid])).log_likelihood
+        step_ll = all_ll[len(train) :]
         rows.append(
             SelectionRow(
                 n_states=k,
-                bic=bic(log_likelihood(model, train), k, train.shape[1], len(train)),
+                bic=bic(float(all_ll[: len(train)].sum()), k, train.shape[1], len(train)),
                 oos_ll_per_bar=float(step_ll.mean()),
                 oos_ll_se=float(step_ll.std(ddof=1) / np.sqrt(len(step_ll))),
             )

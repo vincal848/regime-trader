@@ -113,10 +113,9 @@ def test_refits_are_monthly_with_stable_labels(result: BacktestResult) -> None:
     assert len({tuple(sorted(refit.labels)) for refit in result.refits}) == 1
 
 
-def test_costs_reduce_the_result() -> None:
+def test_costs_reduce_the_result(result: BacktestResult) -> None:
     free = run_backtest(BARS, PLAYBOOKS, replace(CONFIG, costs=Costs(0.0, 0.0, 0.0, 0.0)))
-    costly = run_backtest(BARS, PLAYBOOKS, CONFIG)
-    assert free.equity.iloc[-1] > costly.equity.iloc[-1]
+    assert free.equity.iloc[-1] > result.equity.iloc[-1]
 
 
 def test_the_holdout_is_locked_unless_explicitly_requested() -> None:
