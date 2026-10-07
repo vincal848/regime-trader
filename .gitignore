@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+dist/
+build/
+.coverage
+
+# market data, journals, fitted models, secrets: never committed
+data/
+models/
+journal.db
+runs/
+.env
