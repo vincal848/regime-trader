@@ -88,6 +88,14 @@ def test_positions_stay_long_or_flat_and_within_the_largest_cap(result: Backtest
     assert (notional <= result.equity * 1.0 + 1e-6).all()
 
 
+def test_sizing_waits_for_calibration(result: BacktestResult) -> None:
+    first, second = result.refits[0], result.refits[1]
+    assert not first.calibrated  # nothing has scored the first fit yet
+    window = (result.positions.index >= first.ts) & (result.positions.index < second.ts)
+    notional = (result.positions * BARS["close"].reindex(result.positions.index))[window]
+    assert (notional <= 0.25 * result.equity[window] + 1e-6).all()
+
+
 def test_cash_accounting_reconciles(result: BacktestResult) -> None:
     closed = sum(t.pnl for t in result.trades)
     open_pnl = result.equity.iloc[-1] - CONFIG.initial_equity - closed

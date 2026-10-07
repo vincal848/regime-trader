@@ -179,6 +179,23 @@ def test_a_true_model_is_better_calibrated_than_climatology() -> None:
     assert all(row.brier < row.climatology_brier for row in report.states)
 
 
+def test_calibration_matches_hindsight_states_by_label() -> None:
+    rng = np.random.default_rng(4)
+    hmm = BASE.hmm
+    states = [0]
+    for _ in range(1500):
+        states.append(int(rng.choice(3, p=hmm.transmat[states[-1]])))
+    x = np.array([rng.multivariate_normal(hmm.means[s], hmm.covars[s]) for s in states])
+    reordered = _permuted(
+        BASE, [2, 0, 1], ("CRASH", "CALM_UP", "CHOP")
+    )  # a refit that lists states differently
+    same = state_calibration(BASE, x, reference=BASE)
+    permuted = state_calibration(BASE, x, reference=reordered)
+    for a, b in zip(same.states, permuted.states, strict=True):
+        assert a.label == b.label
+        assert a.brier == pytest.approx(b.brier)
+
+
 def test_a_wrong_model_is_flagged_as_uncalibrated() -> None:
     rng = np.random.default_rng(2)
     x = rng.normal(0.0, 1.0, size=(2000, 2))  # data with no regimes at all

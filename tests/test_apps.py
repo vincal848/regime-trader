@@ -72,14 +72,18 @@ def _fit(end: int, previous: Fit | None = None) -> Fit:
     features = compute_features(BARS.iloc[:end])
     healthy = np.isfinite(features[[*FEATURES, *Z_FEATURES]].to_numpy()).all(axis=1)
     next_returns = features["ret"].shift(-1).to_numpy()
-    return fit_regime(
-        features[healthy], next_returns[healthy], EAGER, FIT_CONFIG, previous.model if previous else None
-    )
+    return fit_regime(features[healthy], next_returns[healthy], EAGER, FIT_CONFIG, previous)
 
 
 @pytest.fixture(scope="module")
-def fit() -> Fit:
+def first_fit() -> Fit:
     return _fit(FIT_END)
+
+
+@pytest.fixture(scope="module")
+def fit(first_fit: Fit) -> Fit:
+    """The first fit, treated as calibrated so the live tests see full sizing."""
+    return replace(first_fit, calibrated=True)
 
 
 # --- the fit bundle ------------------------------------------------------------------------
@@ -92,6 +96,12 @@ def test_a_fit_bundle_holds_everything_live_trading_needs(fit: Fit) -> None:
     assert fit.trained_through == BARS.index[FIT_END - 1]
     assert len(fit.insample_ll) > 0
     assert np.isfinite(fit.insample_ll).all()
+
+
+def test_a_first_fit_is_uncalibrated_until_a_refit_scores_it(first_fit: Fit) -> None:
+    assert not first_fit.calibrated
+    later = _fit(FIT_END + 7 * 30, previous=first_fit)
+    assert later.calibrated  # two clearly separated regimes: the predictions beat climatology
 
 
 def test_a_refit_keeps_the_state_count_and_the_labels(fit: Fit) -> None:
@@ -398,6 +408,13 @@ def test_alert_failures_never_stop_trading(tmp_path: Path, fit: Fit) -> None:
     assert len(rig.journal.decisions()) == 1
     assert rig.broker.orders == [(50, 0)]
     assert "alert failed" in rig.journal.events()["message"].str.cat(sep=" ")
+
+
+def test_an_uncalibrated_fit_sizes_at_a_quarter_of_the_cap(tmp_path: Path, first_fit: Fit) -> None:
+    rig = _rig(tmp_path, first_fit, NO_APPROVAL)
+    _until_long(rig)
+    price = float(BARS["close"].iloc[rig.next_bar - 1])
+    assert rig.broker.shares * price <= 0.25 * rig.broker.equity_value
 
 
 def test_an_implausible_equity_read_is_refused(tmp_path: Path, fit: Fit) -> None:

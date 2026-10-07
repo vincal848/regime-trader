@@ -85,9 +85,11 @@ def test_a_fit_bundle_round_trips_with_kelly_likelihoods_and_prior(tmp_path: Pat
         insample_ll=np.array([-1.5, -2.0, -1.0]),
         prior=np.array([0.7, 0.3]),
         trained_through=pd.Timestamp("2026-01-05 15:00", tz="America/New_York"),
+        calibrated=True,
     )
     save_fit(tmp_path / "fit.json", fit)
     loaded = load_fit(tmp_path / "fit.json")
+    assert loaded.calibrated
     assert loaded.kelly == fit.kelly
     assert loaded.trained_through == fit.trained_through
     np.testing.assert_array_equal(loaded.insample_ll, fit.insample_ll)
