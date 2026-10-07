@@ -139,6 +139,38 @@ def test_a_playbook_switch_closes_the_old_position() -> None:
     assert any("playbook" in reason for reason in decision.reasons)
 
 
+SIBLINGS = replace(MODEL, labels=("CALM_UP_1", "CALM_UP_2", "STRESS", "CRASH"))
+SIBLING_KELLY = dict.fromkeys(SIBLINGS.labels, 4.0)
+
+
+def _steer_siblings(state: EngineState, target: int, bars: int = 4) -> EngineState:
+    for _ in range(bars):
+        state, _ = decide(
+            state, TS, _row(target), 500.0, ACCOUNT, SIBLINGS, PLAYBOOKS, SIBLING_KELLY, CONFIG, healthy=True
+        )
+    return state
+
+
+def test_a_numbered_state_trades_its_base_playbook() -> None:
+    state = _steer_siblings(start(SIBLINGS), 0)
+    _, decision = decide(
+        state, TS, _row(0), 500.0, ACCOUNT, SIBLINGS, PLAYBOOKS, SIBLING_KELLY, CONFIG, healthy=True
+    )
+    assert decision.regime.active == "CALM_UP_1"
+    assert decision.target_shares > 0
+
+
+def test_a_switch_between_sibling_states_keeps_the_position() -> None:
+    state = _holding(_steer_siblings(start(SIBLINGS), 1, bars=12), "CALM_UP", 80)  # CALM_UP_2 is active
+    holding = replace(ACCOUNT, position_shares=80)
+    _, decision = decide(
+        state, TS, _row(1), 500.0, holding, SIBLINGS, PLAYBOOKS, SIBLING_KELLY, CONFIG, healthy=True
+    )
+    assert decision.regime.active == "CALM_UP_2"
+    assert decision.target_shares > 0
+    assert not any("playbook switched" in reason for reason in decision.reasons)
+
+
 def test_a_close_through_the_stop_exits() -> None:
     state = _holding(_steer(start(MODEL), 0), "CALM_UP", 80, stop=495.0)
     holding = replace(ACCOUNT, position_shares=80)

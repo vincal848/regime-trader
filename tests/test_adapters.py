@@ -357,6 +357,17 @@ def test_yahoo_frames_are_normalized_to_the_bar_schema() -> None:
     assert len(bars) == 2  # the 16:30 bar is outside regular hours
 
 
+def test_yahoo_drops_the_bar_still_forming() -> None:
+    index = pd.DatetimeIndex(["2026-01-05 09:30", "2026-01-05 10:30"]).tz_localize("America/New_York")
+    raw = pd.DataFrame(
+        np.tile([500.0, 501.0, 499.0, 500.5, 1e6], (2, 1)),
+        index=index,
+        columns=["Open", "High", "Low", "Close", "Volume"],
+    )
+    bars = normalize_yahoo(raw, now=pd.Timestamp("2026-01-05 11:00", tz="America/New_York"))
+    assert list(bars.index) == [index[0]]
+
+
 # --- alerts --------------------------------------------------------------------------------
 
 TOKEN = "123456:SECRET-TOKEN"

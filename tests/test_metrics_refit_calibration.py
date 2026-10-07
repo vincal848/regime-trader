@@ -18,7 +18,8 @@ from regime_trader.metrics import (
     sharpe,
     t_statistic,
 )
-from regime_trader.refit import DriftConfig, drift_report, match_labels
+from regime_trader.playbook import parse_playbook
+from regime_trader.refit import DriftConfig, drift_report, match_labels, state_kelly
 
 # --- metrics ------------------------------------------------------------------------
 
@@ -128,6 +129,28 @@ def test_a_drop_in_live_likelihood_is_drift() -> None:
 
 
 # --- calibration -------------------------------------------------------------------------
+
+
+def test_kelly_for_a_numbered_state_uses_its_base_playbook() -> None:
+    lines = [
+        "```toml",
+        'state = "CALM_UP"',
+        'entry = "always"',
+        'exit = "never"',
+        "stop_loss_vol = 3.0",
+        "take_profit_vol = 6.0",
+        "max_size = 1.0",
+        "max_hold_bars = 0",
+        'invalidation = "x"',
+        "```",
+    ]
+    calm = parse_playbook("\n".join(lines))
+    model = replace(BASE, labels=("CALM_UP_1", "CALM_UP_2", "CRASH"))
+    features = pd.DataFrame({"ret": np.zeros(40), "trend": np.ones(40)})
+    leader = np.zeros(40, dtype=np.intp)
+    next_returns = np.random.default_rng(0).normal(0.001, 0.002, 40)
+    kelly = state_kelly(model, features, leader, next_returns, {"CALM_UP": calm})
+    assert kelly["CALM_UP_1"] > 0
 
 
 def test_brier_score() -> None:

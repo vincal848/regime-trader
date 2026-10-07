@@ -10,6 +10,7 @@ from regime_trader.risk import (
     Approved,
     RiskLimits,
     Vetoed,
+    base_state,
     check_order,
     kill_reasons,
     state_cap,
@@ -191,6 +192,13 @@ def test_large_orders_need_manual_approval() -> None:
     result = check_order(LIMITS, _account(), "CALM_UP", target_shares=60, price=PRICE)  # $30,000 > $25,000
     assert isinstance(result, Approved)
     assert result.needs_manual_approval
+
+
+def test_base_state_strips_only_the_numbering() -> None:
+    assert base_state("CALM_UP_2") == "CALM_UP"
+    assert base_state("CRASH") == "CRASH"
+    assert base_state("CALM_UP_NEW") == "CALM_UP_NEW"  # unmatched after a refit: unknown until reviewed
+    assert state_cap(LIMITS, "CALM_UP_NEW") == 0.0
 
 
 def test_reducing_orders_never_wait_for_approval() -> None:
