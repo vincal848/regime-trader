@@ -78,3 +78,21 @@ then its implementation, then anything the review found.
     package; flattening never waits for approval.
 - All 24 passed on first implementation. The only fix was typing the
   test helpers without `type: ignore`.
+
+### Step 5: playbooks
+- Tests first (`tests/test_playbook.py`, 21 tests):
+  - typed parsing; unknown keys, unknown features, code-injection
+    attempts, `==`, and an out-of-range `max_size` or stop are all
+    rejected;
+  - exactly one TOML block;
+  - entry/exit evaluation, `and` binding tighter than `or`, z-features and
+    negative numbers, `never`/`always`;
+  - NaN never triggers an entry; `max_hold_bars` forces an exit;
+  - all four starting playbooks parse, and CRASH never enters.
+- Implementation: `playbook.py` (tomllib plus a regex grammar into a
+  disjunction-of-conjunctions `Condition`; no `eval`). Starting playbooks
+  `playbooks/{CALM_UP,CHOP,STRESS,CRASH}.md`, written by the research
+  layer (Claude).
+- Deviation from the spec: stops and take-profits are multiples of the
+  existing 21-bar realized volatility (`stop_loss_vol`, `take_profit_vol`)
+  instead of ATR. Same idea, no extra feature.
