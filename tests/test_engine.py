@@ -191,3 +191,15 @@ def test_no_decision_depends_on_a_future_bar() -> None:
         values[t + 1 :, :4] *= np.exp(rng.normal(0.0, 0.1, len(bars) - t - 1))[:, None]
         values[t + 1 :, 4] *= 5.0
         assert run(pd.DataFrame(values, index=bars.index, columns=bars.columns))[: t + 1] == base[: t + 1]
+
+
+def test_frozen_entries_block_new_positions_but_allow_exits() -> None:
+    frozen = replace(CONFIG, entries_frozen=True)
+    state = _steer(start(MODEL), 0)
+    _, decision = decide(state, TS, _row(0), 500.0, ACCOUNT, MODEL, PLAYBOOKS, KELLY, frozen, healthy=True)
+    assert decision.target_shares == 0
+    assert any("frozen" in reason for reason in decision.reasons)
+    holding = _holding(state, "CALM_UP", 80, stop=495.0)
+    account = replace(ACCOUNT, position_shares=80)
+    _, decision = decide(holding, TS, _row(0), 494.0, account, MODEL, PLAYBOOKS, KELLY, frozen, healthy=True)
+    assert decision.target_shares == 0  # the stop still works
