@@ -61,6 +61,11 @@ def compute_features(bars: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([raw, z], axis=1)
 
 
+def feature_rows(features: pd.DataFrame) -> list[dict[str, float]]:
+    """Feature rows as the engine reads them: one {name: value} per bar."""
+    return [{str(k): float(v) for k, v in row.items()} for row in features.to_dict("records")]
+
+
 def healthy(features: pd.DataFrame) -> npt.NDArray[np.bool_]:
     """Rows where every raw and standardized feature is finite: the only
     rows a model is fitted on or a decision is made from."""

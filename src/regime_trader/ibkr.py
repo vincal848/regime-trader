@@ -23,7 +23,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from regime_trader.bars import COLUMNS, SESSION_CLOSE, SESSION_OPEN, TIMEZONE
+from regime_trader.bars import COLUMNS, TIMEZONE, in_regular_hours
 
 LIVE_PORTS = frozenset({4001, 7496})
 MAX_SLIPPAGE_BPS = 5.0
@@ -147,9 +147,7 @@ class IbkrBroker:
     def _regular_hours(frames: list[pd.DataFrame]) -> pd.DataFrame:
         bars = pd.concat(frames).sort_index()
         bars = bars[~bars.index.duplicated(keep="last")]
-        index = pd.DatetimeIndex(bars.index)
-        clock = index - index.normalize()
-        rth: pd.DataFrame = bars[(clock >= SESSION_OPEN) & (clock < SESSION_CLOSE)][list(COLUMNS)]
+        rth: pd.DataFrame = bars[in_regular_hours(pd.DatetimeIndex(bars.index))][list(COLUMNS)]
         return rth
 
     def history(self, symbol: str, years: int) -> pd.DataFrame:

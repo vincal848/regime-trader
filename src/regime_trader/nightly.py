@@ -34,7 +34,7 @@ import pandas as pd
 
 from regime_trader.alerts import Alerts
 from regime_trader.backtest import BacktestConfig, acceptance, acceptance_report, baseline_sharpes
-from regime_trader.bars import TIMEZONE
+from regime_trader.bars import BARS_PER_SESSION, TIMEZONE
 from regime_trader.calibration import smoothed_states, state_calibration
 from regime_trader.features import Z_FEATURES, compute_features, healthy
 from regime_trader.hmm import forward_filter
@@ -108,7 +108,7 @@ def wrong_state_calls(bars: pd.DataFrame, fit: Fit, day: date) -> pd.DataFrame:
 
 
 def _calibration_line(bars: pd.DataFrame, fit: Fit) -> str:
-    z = _healthy_z(bars).to_numpy()[-CALIBRATION_SESSIONS * 7 :]
+    z = _healthy_z(bars).to_numpy()[-CALIBRATION_SESSIONS * BARS_PER_SESSION :]
     report = state_calibration(fit.model, z)
     brier = np.mean([s.brier for s in report.states])
     climatology = np.mean([s.climatology_brier for s in report.states])

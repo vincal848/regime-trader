@@ -42,9 +42,10 @@ import numpy.typing as npt
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
+from regime_trader.bars import BARS_PER_SESSION
 from regime_trader.calibration import state_calibration
 from regime_trader.engine import EngineState, playbook_for
-from regime_trader.features import Z_FEATURES
+from regime_trader.features import Z_FEATURES, feature_rows
 from regime_trader.hmm import RegimeModel, characterize, fit_hmm, forward_filter, select_states
 from regime_trader.playbook import Playbook, evaluate_signal
 from regime_trader.sizing import kelly_fraction
@@ -130,7 +131,6 @@ def rolling_alarm(live_ll: Sequence[float], floor: float, window: int) -> bool:
     return len(live_ll) >= window and float(np.mean(live_ll[-window:])) < floor
 
 
-BARS_PER_SESSION = 7
 MIN_CALIBRATION_BARS = 10 * BARS_PER_SESSION  # fewer new bars: keep the previous verdict
 
 
@@ -167,7 +167,7 @@ def state_kelly(
 ) -> dict[str, float]:
     """Per state: the Kelly fraction of the next-bar returns over the bars
     where that state led and its playbook would have entered."""
-    rows = [{str(k): float(v) for k, v in row.items()} for row in features.to_dict("records")]
+    rows = feature_rows(features)
     kelly = {}
     for k, label in enumerate(model.labels):
         playbook = playbook_for(playbooks, label)

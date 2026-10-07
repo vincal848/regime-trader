@@ -20,6 +20,7 @@ COLUMNS = ("open", "high", "low", "close", "volume")
 TIMEZONE = "America/New_York"
 SESSION_OPEN = pd.Timedelta(hours=9, minutes=30)
 SESSION_CLOSE = pd.Timedelta(hours=16)
+BARS_PER_SESSION = 7  # hourly RTH bars in a full session, on either grid
 
 
 class BarError(ValueError):
@@ -44,10 +45,16 @@ def validate_bars(bars: pd.DataFrame) -> None:
         raise BarError("low above open or close, or not positive")
     if (bars["volume"] < 0).any():
         raise BarError("negative volume")
+    if not in_regular_hours(index).all():
+        raise BarError("bars outside regular trading hours (09:30-16:00 New York)")
+
+
+def in_regular_hours(index: pd.DatetimeIndex) -> npt.NDArray[np.bool_]:
+    """Which bars start inside the New York regular session (09:30-16:00)."""
     local = index.tz_convert(TIMEZONE)
     clock = local - local.normalize()
-    if ((clock < SESSION_OPEN) | (clock >= SESSION_CLOSE)).any():
-        raise BarError("bars outside regular trading hours (09:30-16:00 New York)")
+    inside: npt.NDArray[np.bool_] = np.asarray((clock >= SESSION_OPEN) & (clock < SESSION_CLOSE))
+    return inside
 
 
 def bar_of_day(index: pd.DatetimeIndex) -> npt.NDArray[np.int64]:

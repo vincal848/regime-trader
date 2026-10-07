@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from regime_trader.bars import COLUMNS, SESSION_CLOSE, SESSION_OPEN, TIMEZONE
+from regime_trader.bars import COLUMNS, TIMEZONE, in_regular_hours
 
 
 def normalize_yahoo(raw: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
@@ -25,8 +25,7 @@ def normalize_yahoo(raw: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.Da
     frame.index = (
         index.tz_localize("UTC").tz_convert(TIMEZONE) if index.tz is None else index.tz_convert(TIMEZONE)
     )
-    clock = frame.index - frame.index.normalize()
-    frame = frame[(clock >= SESSION_OPEN) & (clock < SESSION_CLOSE)]
+    frame = frame[in_regular_hours(pd.DatetimeIndex(frame.index))]
     frame = frame[list(COLUMNS)].astype(float).dropna()
     if now is not None:
         frame = frame[frame.index + pd.Timedelta(hours=1) <= now]

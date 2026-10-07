@@ -14,8 +14,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from regime_trader.bars import TIMEZONE
+
 TRADING_DAYS = 252
-TIMEZONE = "America/New_York"
 
 
 def daily_returns(equity: pd.Series) -> pd.Series:

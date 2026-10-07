@@ -44,7 +44,7 @@ from regime_trader.engine import (
     open_position,
     price_exit,
 )
-from regime_trader.features import compute_features, healthy
+from regime_trader.features import compute_features, feature_rows, healthy
 from regime_trader.metrics import (
     GateResult,
     Gates,
@@ -195,10 +195,6 @@ class _Portfolio:
         return Fill(decision_ts, fill_ts, delta, price, fee)
 
 
-def _rows(features: pd.DataFrame) -> list[dict[str, float]]:
-    return [{str(k): float(v) for k, v in row.items()} for row in features.to_dict("records")]
-
-
 def _trim(bars: pd.DataFrame, config: BacktestConfig, include_holdout: bool) -> pd.DataFrame:
     if config.holdout_start is not None and not include_holdout:
         return bars[bars.index < config.holdout_start]
@@ -223,7 +219,7 @@ def run_backtest(
     bars = _trim(bars, config, include_holdout)
     features = compute_features(bars)
     healthy_rows = healthy(features)
-    rows = _rows(features)
+    rows = feature_rows(features)
     index = pd.DatetimeIndex(bars.index)
     opens, closes = bars["open"].to_numpy(), bars["close"].to_numpy()
     next_returns = features["ret"].shift(-1).to_numpy()
@@ -331,7 +327,7 @@ def run_static(
     bars = _trim(bars, config, include_holdout)
     features = compute_features(bars)
     healthy_rows = healthy(features)
-    rows = _rows(features)
+    rows = feature_rows(features)
     index = pd.DatetimeIndex(bars.index)
     opens, closes = bars["open"].to_numpy(), bars["close"].to_numpy()
     portfolio = _Portfolio(config.initial_equity, config.costs)

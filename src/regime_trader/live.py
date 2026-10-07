@@ -52,7 +52,7 @@ from regime_trader.engine import (
     playbook_for,
 )
 from regime_trader.engine import decide as engine_decide
-from regime_trader.features import Z_FEATURES, compute_features, healthy
+from regime_trader.features import Z_FEATURES, compute_features, feature_rows, healthy
 from regime_trader.hmm import filter_step
 from regime_trader.ibkr import FillReport
 from regime_trader.playbook import Playbook
@@ -388,7 +388,7 @@ class Trader:
             killed=self.control.killed() is not None,
         )
         price = float(bars["close"].iloc[-1])
-        row = {str(k): float(v) for k, v in features.iloc[-1].items()}
+        row = feature_rows(features.iloc[-1:])[0]
         engine_config = replace(
             self.config.engine,
             entries_frozen=cp.entries_frozen,

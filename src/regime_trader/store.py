@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from regime_trader.bars import COLUMNS, validate_bars
+from regime_trader.bars import COLUMNS, TIMEZONE, validate_bars
 from regime_trader.engine import Fill
 from regime_trader.hmm import FloatArray, HmmModel, RegimeModel
 from regime_trader.playbook import Playbook, parse_playbook
@@ -39,7 +39,7 @@ class BarCache:
     def load(self, symbol: str) -> pd.DataFrame:
         path = self._path(symbol)
         if not path.exists():
-            return pd.DataFrame(columns=list(COLUMNS), index=pd.DatetimeIndex([], tz="America/New_York"))
+            return pd.DataFrame(columns=list(COLUMNS), index=pd.DatetimeIndex([], tz=TIMEZONE))
         return pd.read_parquet(path)
 
     def save(self, symbol: str, bars: pd.DataFrame) -> pd.DataFrame:
