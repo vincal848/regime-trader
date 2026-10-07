@@ -22,3 +22,4 @@ live_state.json
 live_state.tmp
 llm_spend.json
 llm_spend.tmp
+demo/

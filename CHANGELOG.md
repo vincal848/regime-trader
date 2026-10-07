@@ -281,3 +281,69 @@ then its implementation, then anything the review found.
 - Test harness correction: IB returns the bar that is still forming, so the
   trader uses only completed bars and runs at each bar's close. The rig now
   steps on bar closes rather than 30 minutes into each bar.
+
+### Fix: numbered states never traded (found by the demo run)
+- **Symptom.** The first Yahoo demo walk-forward made zero trades in 21
+  months.
+- **Root cause.** When the model finds two states of the same kind, the
+  labeller numbers them (`CALM_UP_1`, `CALM_UP_2`; spec §5). State caps
+  already matched on the base name, but playbook lookups, the per-state
+  Kelly estimate, the live trader and the engine's "same playbook?" check
+  all used the exact label. So every numbered state was flat, and a switch
+  between siblings would have closed the position. The synthetic tests
+  never produced numbered states, so nothing caught it.
+- Tests first:
+  - a numbered state trades its base playbook;
+  - a switch between sibling states keeps the position;
+  - Kelly for a numbered state uses its base playbook;
+  - `base_state` strips only the numbering, so `CALM_UP_NEW`, an unmatched
+    state after a refit, stays unknown and capped at zero.
+- Fix: one rule, `risk.base_state`, and one lookup, `engine.playbook_for`,
+  used everywhere a label meets a playbook or a cap.
+
+### Fix: Yahoo and IB both include the bar still forming
+- `yahoo.normalize_yahoo(raw, now=...)` drops a bar that has not finished
+  its hour. The test was written first and failed first. The live trader
+  already used only completed bars.
+
+### Calibration gates sizing (spec §9)
+- **Gap.** Spec §9 says sizing uses the model's probabilities only once
+  they are shown to be calibrated, and otherwise falls back to a fixed
+  quarter of the state cap. Nothing wired this: the backtest and the live
+  trader always assumed the model was calibrated.
+- Tests first:
+  - calibration matches hindsight states by label, not index, so a refit
+    that orders states differently is scored correctly (before, this
+    mis-scored silently);
+  - a first fit is not calibrated, and a refit scores it;
+  - an uncalibrated fit sizes at no more than a quarter of the cap, live
+    and in the backtest (the first walk-forward window);
+  - the fit bundle round-trips its verdict.
+- Implementation:
+  - `Fit.calibrated`;
+  - `fit_regime(..., previous: Fit)` scores the previous fit's one-bar-ahead
+    predictions over the bars since it was trained, against the new fit's
+    hindsight states, and keeps the previous verdict when fewer than ten
+    sessions are new;
+  - the backtest and live AND the verdict into `EngineConfig.calibrated`;
+  - `regime-trader fit` prints which sizing applies.
+
+### Step 10: demo run and docs
+- **Demo walk-forward** on Yahoo hourly SPY, 2025-01 to 2026-10 (no
+  holdout; a demo, not acceptance). Sharpe −1.16 against buy-and-hold's
+  1.08: the gates fail, honestly reported in `docs/DEMO.md`. It is
+  reproducible with `scripts/demo_walkforward.py`. The first demo run is
+  also what exposed the numbered-state defect fixed above.
+- `docs/GO_LIVE.md`:
+  - the spec §15 checklist with current evidence; the verdict is "not
+    ready";
+  - **WHAT COULD BLOW UP THIS ACCOUNT?**: each failure mode with its
+    mitigation in code and the residual risk.
+- `docs/DEPLOY_WINDOWS.md`: IB Gateway under IBC, the NSSM service, Task
+  Scheduler jobs (nightly, watchdog, monthly refit), power, update and
+  auto-login settings, and the daily commands.
+- README expanded; `docs/ARCHITECTURE.md` brought in line with the build:
+  the engine signature, the fit bundle, the live loop, and the files on
+  disk.
+- The CLI backtest header now says "no locked holdout: demo only" for
+  `--no-holdout` runs.

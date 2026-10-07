@@ -56,14 +56,18 @@ only from `bars`.
 ## Engine (layer 1)
 
 ```
-decide(history_bars, model, playbooks, switch_state, position, account, config)
-   -> Decision(ts, probs, next_probs, regime, playbook, signal, target_fraction, order, veto, reasons)
+decide(state, ts, row, price, account, model, playbooks, kelly, config, healthy)
+   -> (EngineState, Decision(ts, probabilities, next_state, log_likelihood, regime,
+                             signal, target_fraction, target_shares, order, entry_rv, reasons))
 ```
 
-It runs features, the forward filter, switching, the playbook signal,
-sizing and the risk check, and returns a `Decision`, which is everything the
-journal, dashboard and alerts need, plus the new switching state. The engine
-never places orders.
+`EngineState` carries the filter's prior, the switching state and the open
+position from bar to bar. `decide` advances the forward filter one step,
+then runs switching, the playbook signal, sizing and the risk check. The
+`Decision` it returns is everything the journal, dashboard and alerts need.
+The engine never places orders; `on_fill` records what the broker actually
+did. `playbook_for` maps a state to its playbook, and numbered siblings
+(`CALM_UP_1`, `CALM_UP_2`) share their base state's playbook.
 
 ## Research (layer 2)
 
@@ -74,10 +78,17 @@ never places orders.
   - stops and take-profits are checked against the next bars' high/low
     (a gap fills at the open);
   - it reports per state and in total, against buy-and-hold and the best
-    static strategy, with the acceptance gates and a locked holdout.
-- **`refit`.** `match_labels` (Hungarian assignment on state statistics)
-  and `drift_report` (transition and mean shifts, live log-likelihood
-  percentile).
+    static strategy, with the acceptance gates and a locked holdout;
+  - `acceptance` is the one scoring path, used by the CLI and the nightly
+    loop.
+- **`refit`.**
+  - `fit_regime` builds the **fit bundle** shared by the backtest and live
+    trading: the labelled model, per-state Kelly, in-sample
+    log-likelihoods, the next-bar prior, and the calibration verdict
+    (each refit scores the previous fit out of sample).
+  - `match_labels` (Hungarian assignment on state statistics).
+  - `drift_report` (transition and mean shifts) and `likelihood_alarm`
+    (the live log-likelihood check).
 - **`calibration`.** The only module allowed to use smoothed posteriors.
   Brier score and reliability per state.
 
@@ -93,24 +104,38 @@ never places orders.
 
 ## Apps (layer 4)
 
-- **`live`.** Once per bar close: get the bar, check staleness, run
-  `engine.decide`, run the risk check, send the order through the broker,
-  write the journal, send alerts. Any exception means flat and an alert.
+- **`live`.** Once per bar close:
+  - reconcile the last order with the broker;
+  - take only completed bars, and treat stale ones as flat;
+  - refuse an implausible equity read;
+  - run `engine.decide`;
+  - watch drift and the kill switch;
+  - send the order, or hold it for approval above $25,000;
+  - write the journal and the checkpoint; send alerts.
+
+  Any exception means flat and an alert. `Control` is a folder holding the
+  sticky `KILL` file and the approval window, so the CLI can change both
+  while the trader runs.
 - **`nightly`.** Assembles the day's record, asks the LLM for proposals,
   backtests each proposal against the gates, and writes `proposals/`.
   Nothing ships without your approval.
 - **`dashboard`.** Streamlit, reading the journal only.
-- **`cli`.** `fetch`, `fit`, `backtest`, `live`, `kill`, `nightly`,
-  `report`.
+- **`cli`.** `fetch`, `fit`, `backtest`, `live`, `kill`, `approve`,
+  `nightly`, `report`, `watchdog`, `dashboard`.
 
 ## State on disk
 
 ```
-data/        bar cache (gitignored)
-journal.db   decisions, orders, fills, switches, alerts (gitignored)
-models/      fitted HmmModel JSON per refit, with label map (gitignored)
-playbooks/   <STATE>.md (versioned)
-proposals/   nightly LLM proposals and their gate results (versioned)
-strategy.md  the accepted configuration (versioned)
-.env         secrets (gitignored; .env.example lists names)
+data/            bar cache (gitignored)
+journal.db       decisions, fills, events (gitignored)
+models/          fit.json (the live fit bundle) and archived fit-*.json (gitignored)
+live_state.json  the trader's checkpoint (gitignored)
+control/         KILL and APPROVED_UNTIL (gitignored)
+reports/         daily reports (gitignored)
+proposals/       nightly reviews, candidate playbooks, gate results, trials.json (gitignored)
+llm_spend.json   the monthly LLM spend ledger (gitignored)
+playbooks/       <STATE>.md (versioned): a proposal ships only by being copied here in a commit
+strategy.md      the accepted configuration, written by you when one passes the gates
+                 and the holdout (versioned; none yet)
+.env             secrets (gitignored; .env.example lists names)
 ```

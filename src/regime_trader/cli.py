@@ -203,7 +203,10 @@ def _backtest(args: argparse.Namespace, paths: Paths, env: Mapping[str, str]) ->
     bars = BarCache(paths.data).load(SYMBOL)
     config = _backtest_config(args, bars)
     result = acceptance(bars, load_playbooks(paths.playbooks), config, include_holdout=args.include_holdout)
-    scope = "INCLUDING the locked holdout" if args.include_holdout else "holdout excluded"
+    if args.no_holdout:
+        scope = "no locked holdout: demo only"
+    else:
+        scope = "INCLUDING the locked holdout" if args.include_holdout else "locked holdout excluded"
     report = f"Walk-forward from {config.test_start.date()} ({scope})\n{acceptance_report(result)}\n"
     folder = paths.runs / datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
