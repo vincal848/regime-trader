@@ -59,6 +59,17 @@ class OpenPosition:
 
 
 @dataclass(frozen=True)
+class Fill:
+    """An execution, in the backtest or at the broker."""
+
+    decision_ts: pd.Timestamp
+    fill_ts: pd.Timestamp
+    shares: int  # signed change
+    price: float
+    commission: float
+
+
+@dataclass(frozen=True)
 class EngineState:
     prior: FloatArray  # P(s_t | x_..t-1): the filter's prior for the next bar
     switch: SwitchState

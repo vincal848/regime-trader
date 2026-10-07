@@ -170,3 +170,47 @@ then its implementation, then anything the review found.
 - Test correction: the causality test compares refit parameters to 1e-9,
   not bit-for-bit. Identical runs differ by about 1e-12 because of
   multithreaded BLAS in hmmlearn; a leak would differ by far more.
+
+### Step 8: adapters (store, IBKR, Yahoo, Telegram, nightly LLM)
+- Tests first (`tests/test_adapters.py`):
+  - **Bar cache:** saves merge, with the later bar winning.
+  - **Journal:** round-trips decisions (probabilities by label), fills and
+    events.
+  - **Model:** JSON round-trip.
+  - **Playbooks:** a playbook whose file name doesn't match its state is
+    rejected.
+  - **IBKR, paper only:**
+    - non-`DU` accounts and the live ports 4001/7496 are refused;
+    - the account ID is masked in repr;
+    - after connecting, a session that can see a live account disconnects
+      and raises;
+    - hourly history arrives in New York time;
+    - orders are marketable limits 5 bps through the price, rounded to the
+      cent, and nothing is sent when already on target.
+  - **Yahoo:** multi-level columns are normalized and bars filtered to
+    regular hours.
+  - **Telegram:**
+    - outbound only;
+    - `send` is the only public method;
+    - unknown alert kinds are rejected;
+    - the token is redacted from repr and from errors.
+  - **Nightly LLM:**
+    - priced at the Opus 5.5 rates, and unknown (fallback) models at the
+      highest known rate;
+    - the call is refused *before* it is made when the worst case exceeds
+      the monthly budget;
+    - a refusal still records its cost.
+- Implementation:
+  - `store.py`: Parquet bar cache and SQLite journal.
+  - `ibkr.py`: typed `IbClient` protocol over ib_async; the paper guard
+    runs both before and after connecting.
+  - `yahoo.py`
+  - `alerts.py`: stdlib urllib.
+  - `llm.py`: streamed `claude-opus-5-5`, adaptive thinking, effort high,
+    server-side refusal fallbacks, and a JSON spend ledger written
+    atomically.
+- `Fill` moved from `backtest` to `engine`: live trading produces fills too,
+  and the live app must not import from the research layer.
+- Review: the exceptions were renamed `BudgetExceededError` and
+  `ReviewRefusedError` (N818). The camelCase lint rule is relaxed only for
+  the IB protocol and its test fake, which mirror IB's API names.

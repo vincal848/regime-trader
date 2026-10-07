@@ -20,10 +20,10 @@ from regime_trader.hmm import HmmModel, RegimeModel
 from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.llm import (
     OPUS_5_5,
-    BudgetExceeded,
+    BudgetExceededError,
     NightlyReviewer,
     RawReview,
-    ReviewRefused,
+    ReviewRefusedError,
     SpendLedger,
     Usage,
     cost_usd,
@@ -214,8 +214,9 @@ def test_broker_reads_equity_position_and_history() -> None:
     assert broker.position("SPY") == 40
     history = broker.history("SPY", years=1)
     assert list(history.columns) == ["open", "high", "low", "close", "volume"]
-    assert str(history.index.tz) == "America/New_York"
-    assert history.index[0].hour == 9 and history.index[0].minute == 30
+    assert str(pd.DatetimeIndex(history.index).tz) == "America/New_York"
+    assert history.index[0].hour == 9
+    assert history.index[0].minute == 30
 
 
 def test_orders_are_marketable_limits_capped_at_5_bps() -> None:
@@ -258,7 +259,12 @@ TOKEN = "123456:SECRET-TOKEN"
 
 def test_telegram_alerts_post_a_tagged_message() -> None:
     sent: list[tuple[str, dict[str, str]]] = []
-    alerts = TelegramAlerts(TOKEN, "42", sender=lambda url, payload: sent.append((url, payload)) or 200)
+
+    def sender(url: str, payload: dict[str, str]) -> int:
+        sent.append((url, payload))
+        return 200
+
+    alerts = TelegramAlerts(TOKEN, "42", sender=sender)
     assert alerts.send("switch", "CHOP -> CALM_UP (p=0.91)")
     url, payload = sent[0]
     assert url.endswith("/sendMessage")
@@ -342,7 +348,7 @@ def test_the_budget_blocks_a_call_before_it_is_made(tmp_path: Path) -> None:
     ledger.add("2026-10", 19.50)
     client = FakeClient([_raw()])
     reviewer = NightlyReviewer(client, ledger, monthly_budget_usd=20.0, max_tokens=32_000)
-    with pytest.raises(BudgetExceeded):
+    with pytest.raises(BudgetExceededError):
         reviewer.review("today's record", now=datetime(2026, 10, 7, tzinfo=UTC))
     assert client.calls == 0
 
@@ -350,7 +356,7 @@ def test_the_budget_blocks_a_call_before_it_is_made(tmp_path: Path) -> None:
 def test_a_refusal_is_raised_and_still_billed(tmp_path: Path) -> None:
     ledger = SpendLedger(tmp_path / "spend.json")
     reviewer = NightlyReviewer(FakeClient([_raw("refusal")]), ledger, monthly_budget_usd=20.0)
-    with pytest.raises(ReviewRefused):
+    with pytest.raises(ReviewRefusedError):
         reviewer.review("today's record", now=datetime(2026, 10, 7, tzinfo=UTC))
     assert ledger.spent("2026-10") > 0
 

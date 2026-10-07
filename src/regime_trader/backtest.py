@@ -37,6 +37,7 @@ from regime_trader.engine import (
     Decision,
     EngineConfig,
     EngineState,
+    Fill,
     OpenPosition,
     decide,
     on_fill,
@@ -88,15 +89,6 @@ class BacktestConfig:
     engine: EngineConfig = field(default_factory=EngineConfig)
     drift: DriftConfig = field(default_factory=DriftConfig)
     holdout_start: pd.Timestamp | None = None  # None: no locked holdout
-
-
-@dataclass(frozen=True)
-class Fill:
-    decision_ts: pd.Timestamp
-    fill_ts: pd.Timestamp
-    shares: int  # signed change
-    price: float
-    commission: float
 
 
 @dataclass(frozen=True)

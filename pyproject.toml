@@ -55,6 +55,11 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "PT", "NPY"]
 ignore = ["N803", "N806"]  # A, K, T follow the HMM literature's notation
 
+[tool.ruff.lint.per-file-ignores]
+# IB's API is camelCase; the client protocol and its test fake mirror it.
+"src/regime_trader/ibkr.py" = ["N802"]
+"tests/test_adapters.py" = ["N802", "N815"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["regime_trader"]
 
