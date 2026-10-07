@@ -17,7 +17,7 @@ from synthetic import make_bars
 from regime_trader.alerts import AlertError, NullAlerts, TelegramAlerts
 from regime_trader.engine import Fill
 from regime_trader.hmm import HmmModel, RegimeModel
-from regime_trader.ibkr import IbkrBroker, PaperOnlyError, settings_from_env
+from regime_trader.ibkr import FillReport, IbkrBroker, PaperOnlyError, settings_from_env
 from regime_trader.llm import (
     OPUS_5_5,
     BudgetExceededError,
@@ -28,7 +28,8 @@ from regime_trader.llm import (
     Usage,
     cost_usd,
 )
-from regime_trader.store import BarCache, Journal, load_model, load_playbooks, save_model
+from regime_trader.refit import Fit
+from regime_trader.store import BarCache, Journal, load_fit, load_model, load_playbooks, save_fit, save_model
 from regime_trader.yahoo import normalize_yahoo
 
 REPO = Path(__file__).resolve().parents[1]
@@ -74,6 +75,40 @@ def test_models_round_trip_through_json(tmp_path: Path) -> None:
     loaded = load_model(tmp_path / "model.json")
     assert loaded.labels == model.labels
     np.testing.assert_array_equal(loaded.hmm.covars, model.hmm.covars)
+
+
+def test_a_fit_bundle_round_trips_with_kelly_likelihoods_and_prior(tmp_path: Path) -> None:
+    model = load_model(_saved_model(tmp_path))
+    fit = Fit(
+        model=model,
+        kelly={"CALM_UP": 0.8, "CRASH": 0.0},
+        insample_ll=np.array([-1.5, -2.0, -1.0]),
+        prior=np.array([0.7, 0.3]),
+        trained_through=pd.Timestamp("2026-01-05 15:00", tz="America/New_York"),
+    )
+    save_fit(tmp_path / "fit.json", fit)
+    loaded = load_fit(tmp_path / "fit.json")
+    assert loaded.kelly == fit.kelly
+    assert loaded.trained_through == fit.trained_through
+    np.testing.assert_array_equal(loaded.insample_ll, fit.insample_ll)
+    np.testing.assert_array_equal(loaded.prior, fit.prior)
+    assert loaded.model.labels == model.labels
+
+
+def _saved_model(tmp_path: Path) -> Path:
+    model = RegimeModel(
+        hmm=HmmModel(
+            np.array([0.5, 0.5]),
+            np.array([[0.9, 0.1], [0.2, 0.8]]),
+            np.zeros((2, 5)),
+            np.array([np.eye(5)] * 2),
+        ),
+        labels=("CALM_UP", "CRASH"),
+        return_mean=np.array([0.001, -0.002]),
+        return_vol=np.array([0.002, 0.01]),
+    )
+    save_model(tmp_path / "model.json", model)
+    return tmp_path / "model.json"
 
 
 def test_journal_records_decisions_fills_and_events(tmp_path: Path) -> None:
@@ -130,6 +165,8 @@ class FakeBar:
 class FakeIb:
     accounts: list[str] = field(default_factory=lambda: ["DU1234567"])
     orders: list[tuple[Any, Any]] = field(default_factory=list)
+    cancelled: list[Any] = field(default_factory=list)
+    durations: list[str] = field(default_factory=list)
     connected: bool = False
 
     def connect(self, host: str, port: int, clientId: int) -> None:
@@ -154,6 +191,7 @@ class FakeIb:
         useRTH: bool,
         formatDate: int,
     ) -> list[FakeBar]:
+        self.durations.append(durationStr)
         start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
         return [FakeBar(start + pd.Timedelta(hours=h), 500.0, 501.0, 499.0, 500.5, 1e6) for h in range(3)]
 
@@ -182,6 +220,10 @@ class FakeIb:
     def placeOrder(self, contract: Any, order: Any) -> Any:
         self.orders.append((contract, order))
         return order
+
+    def cancelOrder(self, order: Any) -> Any:
+        self.cancelled.append(order)
+        return None
 
 
 @dataclass
@@ -238,6 +280,69 @@ def test_no_order_when_already_on_target() -> None:
     assert fake.orders == []
 
 
+def test_recent_bars_request_only_the_last_days() -> None:
+    fake = FakeIb()
+    broker = _broker(fake)
+    broker.connect()
+    bars = broker.recent("SPY", days=2)
+    assert fake.durations == ["2 D"]
+    assert len(bars) == 3
+
+
+@dataclass
+class FakeExecution:
+    shares: float
+    price: float
+
+
+@dataclass
+class FakeCommission:
+    commission: float
+
+
+@dataclass
+class FakeIbFill:
+    execution: FakeExecution
+    commissionReport: FakeCommission
+
+
+@dataclass
+class FakeTrade:
+    order: FakeOrder
+    fills: list[FakeIbFill]
+    done: bool
+
+    def isDone(self) -> bool:
+        return self.done
+
+
+def test_fill_reports_sign_and_average_partial_fills() -> None:
+    broker = _broker(FakeIb())
+    sell = FakeTrade(
+        FakeOrder("SELL", 100, 499.75),
+        [
+            FakeIbFill(FakeExecution(60, 500.0), FakeCommission(0.35)),
+            FakeIbFill(FakeExecution(40, 499.9), FakeCommission(0.14)),
+        ],
+        done=True,
+    )
+    report = broker.fill_report(sell)
+    assert report == FillReport(
+        filled=-100, average_price=pytest.approx(499.96), commission=pytest.approx(0.49), done=True
+    )
+    nothing = broker.fill_report(FakeTrade(FakeOrder("BUY", 10, 500.25), [], done=False))
+    assert nothing.filled == 0
+    assert not nothing.done
+
+
+def test_cancel_sends_the_order_back_to_ib() -> None:
+    fake = FakeIb()
+    broker = _broker(fake)
+    order = FakeOrder("BUY", 10, 500.25)
+    broker.cancel(FakeTrade(order, [], done=False))
+    assert fake.cancelled == [order]
+
+
 # --- yahoo -------------------------------------------------------------------------------
 
 
@@ -288,6 +393,17 @@ def test_alerts_are_outbound_only_and_reject_unknown_kinds() -> None:
     assert public == {"send"}
     with pytest.raises(ValueError, match="kind"):
         alerts.send("buy now", "please")
+
+
+def test_approval_requests_are_an_alert_kind() -> None:
+    sent: list[dict[str, str]] = []
+
+    def sender(url: str, payload: dict[str, str]) -> int:
+        sent.append(payload)
+        return 200
+
+    TelegramAlerts(TOKEN, "42", sender=sender).send("approval", "BUY 60 SPY ($30,000) needs approval")
+    assert sent[0]["text"].startswith("[APPROVAL]")
 
 
 def test_null_alerts_send_nothing() -> None:
